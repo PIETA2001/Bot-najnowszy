@@ -1,0 +1,5 @@
+.env
+token.json
+klucz-google.json
+__pycache__/
+credentials.json
