@@ -39,12 +39,14 @@ GOOGLE_TOKEN_FILE = 'token.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 GOOGLE_SHEET_NAME = 'Odbiory_Kolonia_Warszawska'
 WORKSHEET_NAME = 'Arkusz1'
-G_DRIVE_MAIN_FOLDER_NAME = 'Lokale' 
+G_DRIVE_MAIN_FOLDER_NAME = 'Lokale'
+G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi' # <-- NOWA LINIA
 
 gc = None
 worksheet = None
 drive_service = None
 g_drive_main_folder_id = None 
+g_drive_szeregi_folder_id = None # <-- NOWA LINIA
 
 def get_google_creds():
     """Obsługuje logowanie OAuth 2.0 i przechowuje token."""
@@ -120,22 +122,32 @@ try:
     drive_service = build('drive', 'v3', credentials=creds)
     logger.info("Pomyślnie połączono z Google Drive")
 
-    logger.info(f"Szukanie folderu: '{G_DRIVE_MAIN_FOLDER_NAME}'...")
-    
-    response_folder = drive_service.files().list(
-        q=f"name='{G_DRIVE_MAIN_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=False",
-        spaces='drive',
-        fields='files(id, name)',
-    ).execute()
-    
-    files = response_folder.get('files', [])
-    if not files:
-        logger.critical(f"BŁĄD KRYTYCZNY: Nie znaleziono folderu '{G_DRIVE_MAIN_FOLDER_NAME}' na Twoim 'Mój Dysk'!")
-        logger.critical(f"Upewnij się, że utworzyłeś folder '{G_DRIVE_MAIN_FOLDER_NAME}' na głównym poziomie 'Mój Dysk'.")
+    # Funkcja pomocnicza do wyszukiwania folderu
+    def find_folder(folder_name):
+        logger.info(f"Szukanie folderu: '{folder_name}'...")
+        response_folder = drive_service.files().list(
+            q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=False",
+            spaces='drive',
+            fields='files(id, name)',
+        ).execute()
+        
+        files = response_folder.get('files', [])
+        if not files:
+            logger.critical(f"BŁĄD KRYTYCZNY: Nie znaleziono folderu '{folder_name}' na Twoim 'Mój Dysk'!")
+            logger.critical(f"Upewnij się, że utworzyłeś folder '{folder_name}' na głównym poziomie 'Mój Dysk'.")
+            return None
+        
+        folder_id = files[0].get('id')
+        logger.info(f"Pomyślnie znaleziono folder '{folder_name}' (ID: {folder_id})")
+        return folder_id
+
+    # Wyszukaj oba foldery
+    g_drive_main_folder_id = find_folder(G_DRIVE_MAIN_FOLDER_NAME)
+    g_drive_szeregi_folder_id = find_folder(G_DRIVE_SZEREGI_FOLDER_NAME)
+
+    if not g_drive_main_folder_id or not g_drive_szeregi_folder_id:
+        logger.critical("Nie udało się znaleźć jednego z głównych folderów. Zamykanie.")
         exit()
-    
-    g_drive_main_folder_id = files[0].get('id')
-    logger.info(f"Pomyślnie znaleziono folder '{G_DRIVE_MAIN_FOLDER_NAME}' (ID: {g_drive_main_folder_id})")
 
 except Exception as e:
     logger.critical(f"BŁĄD KRYTYCZNY: Nie można połączyć z Google: {e}")
@@ -168,7 +180,7 @@ Zawsze odpowiadaj WYŁĄCZNIE w formacie JSON, zgodnie z tym schematem:
 }
 
 Ustalenia:
-1.  numer_lokalu_budynku: (np. "15", "104B", "Budynek C, klatka 2", "Lokal 46/2")
+1.  numer_lokalu_budynku: (np. "15", "104B", "Budynek C, klatka 2", "Lokal 46/2", "SZEREG 5") # <-- DODAJ SZEREG
 2.  rodzaj_usterki: (np. "cieknący kran", "brak prądu", "winda nie działa", "porysowana szyba")
 3.  podmiot_odpowiedzialny: (np. "administracja", "serwis", "konserwator", "deweloper", "domhomegroup", "Janusz Pelc", "Michał Piskorz"). Jeśli widzisz imię i nazwisko, potraktuj je jako podmiot odpowiedzialny.
 4.  Jeśli jakiejś informacji brakuje, wstaw w jej miejsce "BRAK DANYCH".
@@ -198,13 +210,29 @@ def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
 
 # --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE ---
 # ZMIANA: Zwraca teraz (success, message, file_id)
-def upload_photo_to_drive(file_bytes, lokal_name, usterka_name, podmiot_name):
-    """Wyszukuje podfolder lokalu i wysyła do niego zdjęcie. Zwraca ID pliku."""
-    global drive_service, g_drive_main_folder_id
+# --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE ---
+# ZMIANA: Dodano 'tryb_odbioru' i 'target_name' zamiast 'lokal_name'
+def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, tryb_odbioru='lokal'):
+    """Wyszukuje podfolder (lokalu lub szeregu) i wysyła do niego zdjęcie."""
+    global drive_service, g_drive_main_folder_id, g_drive_szeregi_folder_id, G_DRIVE_MAIN_FOLDER_NAME, G_DRIVE_SZEREGI_FOLDER_NAME
     
     try:
-        # Krok 1: Znajdź podfolder dla lokalu
-        q_str = f"name='{lokal_name}' and mimeType='application/vnd.google-apps.folder' and '{g_drive_main_folder_id}' in parents and trashed=False"
+        # Krok 1: Wybierz nadrzędny folder na podstawie trybu
+        parent_folder_id = None
+        parent_folder_name = ""
+        
+        if tryb_odbioru == 'lokal':
+            parent_folder_id = g_drive_main_folder_id
+            parent_folder_name = G_DRIVE_MAIN_FOLDER_NAME
+        elif tryb_odbioru == 'szereg':
+            parent_folder_id = g_drive_szeregi_folder_id
+            parent_folder_name = G_DRIVE_SZEREGI_FOLDER_NAME
+        else:
+            logger.error(f"Nierozpoznany tryb odbioru: {tryb_odbioru}")
+            return False, f"Nierozpoznany tryb: {tryb_odbioru}", None
+
+        # Krok 2: Znajdź podfolder (dla lokalu lub szeregu)
+        q_str = f"name='{target_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=False"
         
         response = drive_service.files().list(
             q=q_str, 
@@ -212,23 +240,23 @@ def upload_photo_to_drive(file_bytes, lokal_name, usterka_name, podmiot_name):
             fields='files(id, name)',
         ).execute()
         
-        lokal_folder = response.get('files', [])
+        target_folder = response.get('files', [])
 
-        if not lokal_folder:
-            logger.error(f"Nie znaleziono folderu dla lokalu: {lokal_name} wewnątrz '{G_DRIVE_MAIN_FOLDER_NAME}'")
-            logger.error(f"Upewnij się, że utworzyłeś podfoldery (np. '46.2') wewnątrz folderu 'Lokale' na 'Mój Dysk'.")
-            return False, f"Nie znaleziono folderu Drive dla '{lokal_name}'", None
+        if not target_folder:
+            logger.error(f"Nie znaleziono folderu dla celu: {target_name} wewnątrz '{parent_folder_name}'")
+            logger.error(f"Upewnij się, że utworzyłeś podfoldery (np. '46.2' lub 'SZEREG 1') wewnątrz folderu '{parent_folder_name}' na 'Mój Dysk'.")
+            return False, f"Nie znaleziono folderu Drive dla '{target_name}' w '{parent_folder_name}'", None
 
-        lokal_folder_id = lokal_folder[0].get('id')
+        target_folder_id = target_folder[0].get('id')
         
-        # Krok 2: Przygotuj metadane i plik
+        # Krok 3: Przygotuj metadane i plik
         file_name = f"{usterka_name} - {podmiot_name}.jpg"
         file_metadata = {
             'name': file_name,
-            'parents': [lokal_folder_id] 
+            'parents': [target_folder_id] 
         }
         
-        # Krok 3: Wyślij plik
+        # Krok 4: Wyślij plik
         file_bytes.seek(0)
         media = MediaIoBaseUpload(file_bytes, mimetype='image/jpeg', resumable=True)
         
@@ -239,7 +267,7 @@ def upload_photo_to_drive(file_bytes, lokal_name, usterka_name, podmiot_name):
         ).execute()
         
         file_id = file.get('id')
-        logger.info(f"Pomyślnie wysłano plik '{file_name}' do folderu '{lokal_name}' (ID: {file_id})")
+        logger.info(f"Pomyślnie wysłano plik '{file_name}' do folderu '{target_name}' (ID: {file_id})")
         return True, file_name, file_id
     
     except Exception as e:
@@ -291,7 +319,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór
         if user_message.lower().strip() == 'koniec odbioru':
             if chat_data.get('odbiur_aktywny'):
-                lokal = chat_data.get('odbiur_lokal')
+                lokal = chat_data.get('odbiur_lokal_do_arkusza') # Zamiast 'odbiur_lokal
                 podmiot = chat_data.get('odbiur_podmiot')
                 
                 # ZMIANA: Korzystamy z nowej listy 'odbiur_wpisy'
@@ -374,36 +402,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             return # Zakończ obsługę tej wiadomości
 
-        # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór
+       # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór
         if user_message.lower().startswith('rozpoczęcie odbioru'):
             logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini po dane sesji...")
-            await update.message.reply_text("Rozpoczynam odbiór... 🧠 Analizuję dane lokalu i firmy...")
+            await update.message.reply_text("Rozpoczynam odbiór... 🧠 Analizuję dane celu i firmy...")
             
             response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
             cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             dane_startowe = json.loads(cleaned_text)
             
-            lokal = dane_startowe.get('numer_lokalu_budynku')
+            lokal_raw = dane_startowe.get('numer_lokalu_budynku')
             podmiot = dane_startowe.get('podmiot_odpowiedzialny')
 
-            if lokal == "BRAK DANYCH" or podmiot == "BRAK DANYCH":
-                 await update.message.reply_text("❌ Nie udało się rozpoznać lokalu lub firmy.\nSpróbuj ponownie, np: 'Rozpoczęcie odbioru, lokal 46/2, firma domhomegroup'.")
+            if lokal_raw == "BRAK DANYCH" or podmiot == "BRAK DANYCH":
+                await update.message.reply_text("❌ Nie udało się rozpoznać celu (lokalu/szeregu) lub firmy.\n"
+                                                "Spróbuj ponownie, np: \n"
+                                                "'Rozpoczęcie odbioru, lokal 46/2, firma X'\n"
+                                                "'Rozpoczęcie odbioru, SZEREG 5, firma Y'")
             else:
-                lokal_normalized = lokal.lower().replace("lokal", "").strip().replace("/", ".")
+                target_name = ""
+                tryb_odbioru = ""
+                
+                # NOWA LOGIKA: Sprawdź czy to lokal czy szereg
+                if "szereg" in lokal_raw.lower():
+                    tryb_odbioru = "szereg"
+                    target_name = lokal_raw.upper().strip() # np. "SZEREG 5"
+                else:
+                    tryb_odbioru = "lokal"
+                    target_name = lokal_raw.lower().replace("lokal", "").strip().replace("/", ".") # np. "46.2"
                 
                 chat_data['odbiur_aktywny'] = True
-                chat_data['odbiur_lokal'] = lokal_normalized 
+                chat_data['odbiur_lokal_do_arkusza'] = target_name # Tego użyjemy do zapisu w Arkuszu
+                chat_data['odbiur_target_nazwa'] = target_name    # Tego użyjemy do wysyłania na Drive
+                chat_data['tryb_odbioru'] = tryb_odbioru          # Tego użyjemy do wysyłania na Drive
                 chat_data['odbiur_podmiot'] = podmiot
                 
-                # ZMIANA: Inicjujemy nową listę 'odbiur_wpisy'
                 chat_data['odbiur_wpisy'] = [] 
                 
-                await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\nLokal: {lokal_normalized}\nFirma: {podmiot}\n\n"
+                await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
+                                                f"Cel: {target_name}\n" # Zmieniona nazwa
+                                                f"Firma: {podmiot}\n\n"
                                                 f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
                                                 f"Wpisz 'cofnij', aby usunąć ostatni wpis.\n"
                                                 f"Zakończ pisząc 'Koniec odbioru'.")
             
-            return 
+            return
 
         # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
         if chat_data.get('odbiur_aktywny'):
@@ -483,8 +526,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!\nInaczej nie wiem, co zapisać. Wyślij ponownie z opisem.")
         return
 
-    lokal = chat_data.get('odbiur_lokal')
+    # POBIERZ NOWE ZMIENNE Z SESJI
     podmiot = chat_data.get('odbiur_podmiot')
+    target_name = chat_data.get('odbiur_target_nazwa')
+    tryb = chat_data.get('tryb_odbioru')
     
     await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{usterka}'. Przetwarzam i wysyłam na Drive...")
 
@@ -494,13 +539,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_bytes_io = io.BytesIO()
         await photo_file.download_to_memory(file_bytes_io)
         
-        # ZMIANA: Odbieramy 3 wartości, w tym file_id
-        success, message, file_id = upload_photo_to_drive(file_bytes_io, lokal, usterka, podmiot)
+        # ZMIANA: Przekazujemy nowe zmienne do funkcji wysyłania
+        success, message, file_id = upload_photo_to_drive(
+            file_bytes_io, 
+            target_name, 
+            usterka, 
+            podmiot, 
+            tryb_odbioru=tryb
+        )
         
         if success:
             opis_zdjecia = f"{usterka} (zdjęcie)"
             
-            # ZMIANA: Tworzymy słownik wpisu dla zdjęcia
             nowy_wpis = {
                 'typ': 'zdjecie',
                 'opis': opis_zdjecia,
@@ -509,8 +559,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
             await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: '{message}'\n"
-                                          f"➕ Usterka dodana do listy: '{opis_zdjecia}'\n"
-                                          f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).")
+                                            f"➕ Usterka dodana do listy: '{opis_zdjecia}'\n"
+                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).")
         else:
             await update.message.reply_text(f"❌ Błąd Google Drive: {message}")
             
@@ -558,4 +608,5 @@ def main():
     logger.info(f"Bot nasłuchuje na porcie {PORT}")
 
 if __name__ == '__main__':
+
     main()
