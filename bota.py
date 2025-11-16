@@ -333,30 +333,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not wpisy_lista:
                     await update.message.reply_text(f"Zakończono odbiór dla lokalu {lokal}. Nie dodano żadnych usterek.")
                 else:
-                    logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla lokalu {lokal}...")
-                    licznik_zapisanych = 0
-                    
-                    # ZMIANA: Iterujemy po liście słowników, wyciągamy 'opis' ORAZ 'file_id'
-                      for wpis in wpisy_lista:
-                          
-                          # Przygotuj podstawowe dane
-                          dane_json = {
-                              "numer_lokalu_budynku": lokal,
-                              "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'),
-                              "podmiot_odpowiedzialny": podmiot,
-                              "link_do_zdjecia": "" # Domyślnie pusty link
-                          }
+                        logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla lokalu {lokal}...")
+                        licznik_zapisanych = 0
+                        
+                        # To jest właściwe wcięcie - na równi z linijkami powyżej
+                        for wpis in wpisy_lista:
+                            
+                            # A wszystko wewnątrz pętli 'for' jest wcięte o jeden poziom głębiej
+                            dane_json = {
+                                "numer_lokalu_budynku": lokal,
+                                "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'),
+                                "podmiot_odpowiedzialny": podmiot,
+                                "link_do_zdjecia": ""
+                            }
 
-                          # NOWA LOGIKA: Sprawdź, czy wpis był zdjęciem (czy ma file_id)
-                          file_id_ze_zdjecia = wpis.get('file_id')
-                          if file_id_ze_zdjecia:
-                              # Jeśli tak, stwórz standardowy link do Google Drive
-                              link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
-                              dane_json['link_do_zdjecia'] = link_zdjecia
-                          
-                          # Przekaż kompletny słownik (z linkiem lub bez) do funkcji zapisu
-                          if zapisz_w_arkuszu(dane_json, message_time):
-                              licznik_zapisanych += 1
+                            file_id_ze_zdjecia = wpis.get('file_id')
+                            if file_id_ze_zdjecia:
+                                link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
+                                dane_json['link_do_zdjecia'] = link_zdjecia
+                            
+                            if zapisz_w_arkuszu(dane_json, message_time):
+                                licznik_zapisanych += 1
                     
                     await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla lokalu {lokal}.")
                 
@@ -627,4 +624,5 @@ def main():
 if __name__ == '__main__':
 
     main()
+
 
