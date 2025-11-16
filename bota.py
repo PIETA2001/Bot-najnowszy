@@ -195,12 +195,17 @@ def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
     """Zapisuje przeanalizowane dane w nowym wierszu Arkusza Google."""
     try:
         data_str = data_telegram.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # ZMIANA: Dodano piątą kolumnę 'link_do_zdjecia'
+        # Jeśli klucza nie ma, .get() bezpiecznie zwróci pusty string ''
         nowy_wiersz = [
             data_str,
             dane_json.get('numer_lokalu_budynku', 'BŁĄD JSON'),
             dane_json.get('rodzaj_usterki', 'BŁĄD JSON'),
-            dane_json.get('podmiot_odpowiedzialny', 'BŁĄD JSON')
+            dane_json.get('podmiot_odpowiedzialny', 'BŁĄD JSON'),
+            dane_json.get('link_do_zdjecia', '')  # <-- NOWA LINIA
         ]
+        
         worksheet.append_row(nowy_wiersz, value_input_option='USER_ENTERED')
         logger.info(f"Dodano wiersz do arkusza: {nowy_wiersz}")
         return True
@@ -331,15 +336,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla lokalu {lokal}...")
                     licznik_zapisanych = 0
                     
-                    # ZMIANA: Iterujemy po liście słowników i wyciągamy 'opis'
-                    for wpis in wpisy_lista:
-                        dane_json = {
-                            "numer_lokalu_budynku": lokal,
-                            "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'), # Wyciągamy opis
-                            "podmiot_odpowiedzialny": podmiot
-                        }
-                        if zapisz_w_arkuszu(dane_json, message_time): 
-                            licznik_zapisanych += 1
+                    # ZMIANA: Iterujemy po liście słowników, wyciągamy 'opis' ORAZ 'file_id'
+                      for wpis in wpisy_lista:
+                          
+                          # Przygotuj podstawowe dane
+                          dane_json = {
+                              "numer_lokalu_budynku": lokal,
+                              "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'),
+                              "podmiot_odpowiedzialny": podmiot,
+                              "link_do_zdjecia": "" # Domyślnie pusty link
+                          }
+
+                          # NOWA LOGIKA: Sprawdź, czy wpis był zdjęciem (czy ma file_id)
+                          file_id_ze_zdjecia = wpis.get('file_id')
+                          if file_id_ze_zdjecia:
+                              # Jeśli tak, stwórz standardowy link do Google Drive
+                              link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
+                              dane_json['link_do_zdjecia'] = link_zdjecia
+                          
+                          # Przekaż kompletny słownik (z linkiem lub bez) do funkcji zapisu
+                          if zapisz_w_arkuszu(dane_json, message_time):
+                              licznik_zapisanych += 1
                     
                     await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla lokalu {lokal}.")
                 
@@ -610,3 +627,4 @@ def main():
 if __name__ == '__main__':
 
     main()
+
