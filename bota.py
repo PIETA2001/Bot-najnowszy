@@ -139,9 +139,8 @@ except Exception as e:
 
 
 # --- 4. Konfiguracja Gemini (AI) ---
-# POPRAWKA NAZWY MODELU
 model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash", # Poprawiona nazwa
+    model_name="gemini-2.5-flash",
     generation_config={
         "temperature": 0.2,
         "max_output_tokens": 2048,
@@ -170,11 +169,7 @@ Ustalenia:
 
 # --- Funkcja tworząca klawiaturę Inline ---
 def get_inline_keyboard(usterka_id=None):
-    """
-    Tworzy i zwraca klawiaturę inline.
-    Jeśli podano usterka_id, dodaje przycisk "Cofnij" z tym ID.
-    Zawsze dodaje przycisk "Zakończ Odbiór".
-    """
+    """Tworzy i zwraca klawiaturę inline."""
     keyboard = []
     
     if usterka_id:
@@ -362,7 +357,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini...")
             await update.message.reply_text("Rozpoczynam odbiór... 🧠 Analizuję dane celu i firmy...")
             
-            response = model.generate_content(user_message) # ZMIANA: Usunięto prompt systemowy
+            response = model.generate_content(user_message)
             cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             dane_startowe = json.loads(cleaned_text)
             
@@ -393,12 +388,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_data['odbiur_podmiot'] = podmiot
                 chat_data['odbiur_wpisy'] = []
                 
+                # ZMIANA: Dodano parse_mode='HTML'
                 await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
-                                                f"Cel: {target_name}\n"
-                                                f"Firma: {podmiot}\n\n"
+                                                f"Cel: <b>{target_name}</b>\n"
+                                                f"Firma: <b>{podmiot}</b>\n\n"
                                                 f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
                                                 f"Użyj przycisków poniżej, aby cofnąć lub zakończyć.\n",
-                                                reply_markup=get_inline_keyboard(usterka_id=None))
+                                                reply_markup=get_inline_keyboard(usterka_id=None),
+                                                parse_mode='HTML')
             
             return
 
@@ -406,7 +403,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chat_data.get('odbiur_aktywny'):
             logger.info(f"Odbiór aktywny. Wysyłanie usterki '{user_message}' do Gemini...")
             
-            response = model.generate_content(user_message) # ZMIANA: Usunięto prompt systemowy
+            # AI Zostaje na Twoje życzenie
+            response = model.generate_content(user_message) 
             cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             dane_usterki = json.loads(cleaned_text)
             
@@ -422,9 +420,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            await update.message.reply_text(f"➕ Dodano (tekst): '{usterka_opis}'\n"
+            # ZMIANA: Dodano parse_mode='HTML'
+            await update.message.reply_text(f"➕ Dodano (tekst): <b>{usterka_opis}</b>\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
-                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id))
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id),
+                                            parse_mode='HTML')
             return
 
     except json.JSONDecodeError as json_err:
@@ -441,17 +441,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text("Przetwarzam jako pojedyncze zgłoszenie... 🧠")
         
-        response = model.generate_content(user_message) # ZMIANA: Usunięto prompt systemowy
+        response = model.generate_content(user_message)
         cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         dane = json.loads(cleaned_text)
         logger.info(f"Gemini zwróciło JSON: {dane}")
 
         if zapisz_w_arkuszu(dane, message_time):
+            # ZMIANA: Dodano parse_mode='HTML'
             await update.message.reply_text(f"✅ Zgłoszenie (pojedyncze) przyjęte i zapisane:\n\n"
-                                            f"Lokal: {dane.get('numer_lokalu_budynku')}\n"
-                                            f"Usterka: {dane.get('rodzaj_usterki')}\n"
-                                            f"Podmiot: {dane.get('podmiot_odpowiedzialny')}",
-                                            reply_markup=ReplyKeyboardRemove())
+                                            f"Lokal: <b>{dane.get('numer_lokalu_budynku')}</b>\n"
+                                            f"Usterka: <b>{dane.get('rodzaj_usterki')}</b>\n"
+                                            f"Podmiot: <b>{dane.get('podmiot_odpowiedzialny')}</b>",
+                                            reply_markup=ReplyKeyboardRemove(),
+                                            parse_mode='HTML')
         else:
             await update.message.reply_text("❌ Błąd zapisu do bazy danych (Arkusza). Skontaktuj się z adminem.")
 
@@ -505,14 +507,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'opis': opis_zdjecia,
                 'file_id': file_id
             }
-            # --- POPRAWKA LITERÓWKI TUTAJ ---
             chat_data['odbiur_wpisy'].append(nowy_wpis)
-            # --- KONIEC POPRAWKI ---
             
-            await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: '{message}'\n"
-                                            f"➕ Usterka dodana do listy: '{opis_zdjecia}'\n"
+            # ZMIANA: Dodano parse_mode='HTML'
+            await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: <b>{message}</b>\n"
+                                            f"➕ Usterka dodana do listy: <b>{opis_zdjecia}</b>\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
-                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id))
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id),
+                                            parse_mode='HTML')
         else:
             await update.message.reply_text(f"❌ Błąd Google Drive: {message}",
                                             reply_markup=get_inline_keyboard(usterka_id=None))
@@ -567,7 +569,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             wpisy_lista.remove(wpis_to_delete)
             chat_data['odbiur_wpisy'] = wpisy_lista
             
-            delete_feedback = f"↩️ Usunięto: '{opis_usunietego}'"
+            # ZMIANA: Dodano <b> tagi
+            delete_feedback = f"↩️ Usunięto: <b>{opis_usunietego}</b>"
 
             if wpis_to_delete.get('typ') == 'zdjecie':
                 file_id_to_delete = wpis_to_delete.get('file_id')
@@ -579,12 +582,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         delete_feedback += f"\n(BŁĄD usuwania z Drive: {delete_error})."
             
             try:
-                await query.edit_message_text(f"--- USUNIĘTO: {opis_usunietego} ---", reply_markup=None)
+                # ZMIANA: Dodano parse_mode='HTML'
+                await query.edit_message_text(f"--- USUNIĘTO: <b>{opis_usunietego}</b> ---", reply_markup=None, parse_mode='HTML')
             except Exception:
                 pass
 
+            # ZMIANA: Dodano parse_mode='HTML'
             await query.message.reply_text(f"{delete_feedback}\n(Pozostało: {len(wpisy_lista)}).", 
-                                           reply_markup=get_inline_keyboard(usterka_id=None))
+                                           reply_markup=get_inline_keyboard(usterka_id=None),
+                                           parse_mode='HTML')
         
         except Exception as e:
             logger.error(f"Błąd podczas usuwania wpisu: {e}")
@@ -670,4 +676,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
