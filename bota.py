@@ -14,10 +14,9 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
-from telegram import Update
+# POPRAWKA IMPORTÓW: Dodano ReplyKeyboardMarkup/Remove i usunięto 'p' z ContextTypes
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, MessageHandler, filters, ContextTypesp
-
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 # --- 1. Konfiguracja Logowania (Ważne do debugowania) ---
 logging.basicConfig(
@@ -42,13 +41,13 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapi
 GOOGLE_SHEET_NAME = 'Odbiory_Kolonia_Warszawska'
 WORKSHEET_NAME = 'Arkusz1'
 G_DRIVE_MAIN_FOLDER_NAME = 'Lokale'
-G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi' # <-- NOWA LINIA
+G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi'
 
 gc = None
 worksheet = None
 drive_service = None
 g_drive_main_folder_id = None
-g_drive_szeregi_folder_id = None # <-- NOWA LINIA
+g_drive_szeregi_folder_id = None
 
 def get_google_creds():
     """Obsługuje logowanie OAuth 2.0 i przechowuje token."""
@@ -92,8 +91,6 @@ def get_google_creds():
             logger.info("Jeśli widzisz to na serwerze, wdrożenie się nie powiedzie.")
             logger.info("-------------------------------------------------")
             
-            # Ten kod zadziała tylko, jeśli plik credentials.json został 
-            # pomyślnie utworzony w Kroku 1 (powyżej)
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_FILE, SCOPES)
                 creds = flow.run_local_server(port=0)
@@ -102,7 +99,7 @@ def get_google_creds():
                 logger.critical("Upewnij się, że plik 'credentials.json' istnieje lub zmienna GOOGLE_CREDENTIALS_JSON jest ustawiona.")
                 exit()
 
-        # Zapisz zaktualizowany token (szczególnie po odświeżeniu)
+        # Zapisz zaktualizowany token
         with open(GOOGLE_TOKEN_FILE, 'w') as token:
             token.write(creds.to_json())
         logger.info(f"Pomyślnie zapisano/zaktualizowano token w {GOOGLE_TOKEN_FILE}")
@@ -190,25 +187,25 @@ Ustalenia:
 
 Wiadomość użytkownika do analizy znajduje się poniżej.
 """
+
 # --- NOWOŚĆ: Definicja Klawiatury ---
 KLAWIATURA_ODBIORU = [
     ["Cofnij ↩️"],
     ["Koniec odbioru 🏁"]
 ]
+
 # --- 6. Funkcja do Zapisu w Arkuszu ---
-# ZMIANA: Dodano obsługę 'link_do_zdjecia'
 def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
     """Zapisuje przeanalizowane dane w nowym wierszu Arkusza Google."""
     try:
         data_str = data_telegram.strftime('%Y-%m-%d %H:%M:%S')
         
-        # ZMIANA: Dodano piątą kolumnę 'link_do_zdjecia'
         nowy_wiersz = [
             data_str,
             dane_json.get('numer_lokalu_budynku', 'BŁĄD JSON'),
             dane_json.get('rodzaj_usterki', 'BŁĄD JSON'),
             dane_json.get('podmiot_odpowiedzialny', 'BŁĄD JSON'),
-            dane_json.get('link_do_zdjecia', '')  # <-- NOWA LINIA
+            dane_json.get('link_do_zdjecia', '')
         ]
         
         worksheet.append_row(nowy_wiersz, value_input_option='USER_ENTERED')
@@ -238,7 +235,7 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
             logger.error(f"Nierozpoznany tryb odbioru: {tryb_odbioru}")
             return False, f"Nierozpoznany tryb: {tryb_odbioru}", None
 
-        # Krok 2: Znajdź podfolder (dla lokalu lub szeregu)
+        # Krok 2: Znajdź podfolder
         q_str = f"name='{target_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=False"
         
         response = drive_service.files().list(
@@ -282,7 +279,7 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         return False, str(e), None
 
 
-# --- NOWOŚĆ: Funkcja do usuwania pliku z Google Drive ---
+# --- Funkcja do usuwania pliku z Google Drive ---
 def delete_file_from_drive(file_id):
     """Usuwa plik z Google Drive na podstawie jego ID."""
     global drive_service
@@ -295,7 +292,6 @@ def delete_file_from_drive(file_id):
         logger.info(f"Pomyślnie usunięto plik z Drive (ID: {file_id})")
         return True, None
     except Exception as e:
-        # Szczególnie ważny błąd 'fileNotFound'
         logger.error(f"Błąd podczas usuwania pliku {file_id} z Drive: {e}")
         return False, str(e)
 
@@ -324,8 +320,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- LOGIKA SESJI ODBIORU ---
 
         # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór
-        # <-- ZMIANA: Używamy .startswith() aby emoji nie przeszkadzało
-        if user_message.lower().strip().startswith('koniec odbioru'):
+        if user_message.lower().strip().startswith('koniec odbioru'): # ZMIANA: .startswith()
             if chat_data.get('odbiur_aktywny'):
                 lokal = chat_data.get('odbiur_lokal_do_arkusza')
                 podmiot = chat_data.get('odbiur_podmiot')
@@ -334,7 +329,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if not wpisy_lista:
                     await update.message.reply_text(f"Zakończono odbiór dla lokalu {lokal}. Nie dodano żadnych usterek.",
-                                                    reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
+                                                    reply_markup=ReplyKeyboardRemove()) # ZMIANA: Ukryj klawiaturę
                 else:
                     logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla lokalu {lokal}...")
                     licznik_zapisanych = 0
@@ -355,17 +350,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             licznik_zapisanych += 1
                     
                     await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla lokalu {lokal}.",
-                                                    reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
+                                                    reply_markup=ReplyKeyboardRemove()) # ZMIANA: Ukryj klawiaturę
                 
                 chat_data.clear()
             else:
                 await update.message.reply_text("Żaden odbiór nie jest aktywny. Aby zakończyć, musisz najpierw go rozpocząć.",
-                                                reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę (na wszelki wypadek)
+                                                reply_markup=ReplyKeyboardRemove()) # ZMIANA: Ukryj klawiaturę
             return
 
-        # --- NOWOŚĆ: SCENARIUSZ 1.5: Użytkownik COFA ostatnią akcję ---
-        # <-- ZMIANA: Używamy .startswith() aby emoji nie przeszkadzało
-        if user_message.lower().strip().startswith('cofnij'):
+        # --- SCENARIUSZ 1.5: Użytkownik COFA ostatnią akcję ---
+        if user_message.lower().strip().startswith('cofnij'): # ZMIANA: .startswith()
             if not chat_data.get('odbiur_aktywny'):
                 await update.message.reply_text("Nie można cofnąć. Żaden odbiór nie jest aktywny.")
                 return
@@ -376,7 +370,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             try:
-                # ... (cała logika cofania bez zmian) ...
                 ostatni_wpis = wpisy_lista.pop()
                 chat_data['odbiur_wpisy'] = wpisy_lista
                 
@@ -409,7 +402,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Błąd podczas operacji 'cofnij': {e}")
                 await update.message.reply_text(f"❌ Wystąpił błąd podczas cofania: {e}")
             
-            return # Zakończ obsługę tej wiadomości
+            return
 
         # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór
         if user_message.lower().startswith('rozpoczęcie odbioru'):
@@ -428,7 +421,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 "Spróbuj ponownie, np: \n"
                                                 "'Rozpoczęcie odbioru, lokal 46/2, firma X'\n"
                                                 "'Rozpoczęcie odbioru, SZEREG 5, firma Y'",
-                                                reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
+                                                reply_markup=ReplyKeyboardRemove()) # ZMIANA: Ukryj klawiaturę
             else:
                 target_name = ""
                 tryb_odbioru = ""
@@ -447,16 +440,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_data['odbiur_podmiot'] = podmiot
                 chat_data['odbiur_wpisy'] = []
                 
-                # <-- ZMIANA: Stwórz instancję klawiatury
+                # ZMIANA: Stwórz instancję klawiatury
                 reply_markup = ReplyKeyboardMarkup(KLAWIATURA_ODBIORU, resize_keyboard=True)
                 
                 await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
                                                 f"Cel: {target_name}\n"
                                                 f"Firma: {podmiot}\n\n"
                                                 f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
-                                                f"Użyj przycisków na dole, aby cofnąć lub zakończyć.\n" # <-- ZMIANA: Lepszy tekst
-                                                f"Zakończ pisząc 'Koniec odbioru'.",
-                                                reply_markup=reply_markup) # <-- ZMIANA: Pokaż klawiaturę
+                                                f"Użyj przycisków na dole, aby cofnąć lub zakończyć.\n",
+                                                reply_markup=reply_markup) # ZMIANA: Pokaż klawiaturę
             
             return
 
@@ -478,11 +470,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            # <-- ZMIANA: Dodajemy klawiaturę do odpowiedzi, aby nie zniknęła
+            # ZMIANA: Dodajemy klawiaturę do odpowiedzi, aby nie zniknęła
             reply_markup = ReplyKeyboardMarkup(KLAWIATURA_ODBIORU, resize_keyboard=True)
             await update.message.reply_text(f"➕ Dodano (tekst): '{usterka_opis}'\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}). Wpisz kolejną, 'cofnij' lub 'Koniec odbioru'.",
-                                            reply_markup=reply_markup) # <-- ZMIANA: Podtrzymaj klawiaturę
+                                            reply_markup=reply_markup) # ZMIANA: Podtrzymaj klawiaturę
             return
 
     except json.JSONDecodeError as json_err:
@@ -513,7 +505,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             f"Lokal: {dane.get('numer_lokalu_budynku')}\n"
                                             f"Usterka: {dane.get('rodzaj_usterki')}\n"
                                             f"Podmiot: {dane.get('podmiot_odpowiedzialny')}",
-                                            reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
+                                            reply_markup=ReplyKeyboardRemove()) # ZMIANA: Ukryj klawiaturę
         else:
             await update.message.reply_text("❌ Błąd zapisu do bazy danych (Arkusza). Skontaktuj się z adminem.")
 
@@ -524,18 +516,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Wystąpił nieoczekiwany błąd (fallback): {e}")
         await update.message.reply_text(f"❌ Wystąpił krytyczny błąd (fallback): {e}")
 
+
 # --- 7b. NOWY HANDLER DLA ZDJĘĆ ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Przechwytuje zdjęcie W TRAKCIE aktywnej sesji odbioru."""
     chat_data = context.chat_data
     
     if not chat_data.get('odbiur_aktywny'):
-        await update.message.reply_text("Wyślij zdjęcie *po* rozpoczęciu odbioru. Teraz ta fotka zostanie zignorowana.")
+        await update.message.reply_text("Wyślij zdjęcie *po* rozpoczęciu odbioru. Teraz ta fotka zostanie zignorowana.",
+                                        reply_markup=ReplyKeyboardRemove()) # ZMIANA: Ukryj klawiaturę
         return
 
     usterka = update.message.caption
     if not usterka:
-        await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!\nInaczej nie wiem, co zapisać. Wyślij ponownie z opisem.")
+        # ZMIANA: Podtrzymaj klawiaturę, jeśli jest aktywna
+        reply_markup = ReplyKeyboardMarkup(KLAWIATURA_ODBIORU, resize_keyboard=True)
+        await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!\nInaczej nie wiem, co zapisać. Wyślij ponownie z opisem.",
+                                        reply_markup=reply_markup)
         return
 
     # POBIERZ NOWE ZMIENNE Z SESJI
@@ -543,7 +540,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_name = chat_data.get('odbiur_target_nazwa')
     tryb = chat_data.get('tryb_odbioru')
     
-    await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{usterka}'. Przetwarzam i wysyłam na Drive...")
+    # ZMIANA: Podtrzymaj klawiaturę
+    reply_markup = ReplyKeyboardMarkup(KLAWIATURA_ODBIORU, resize_keyboard=True)
+    await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{usterka}'. Przetwarzam i wysyłam na Drive...",
+                                    reply_markup=reply_markup)
 
     try:
         photo_file = await update.message.photo[-1].get_file()
@@ -565,19 +565,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             nowy_wpis = {
                 'typ': 'zdjecie',
                 'opis': opis_zdjecia,
-                'file_id': file_id  # Zapisujemy ID pliku na Drive
+                'file_id': file_id
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
             await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: '{message}'\n"
                                             f"➕ Usterka dodana do listy: '{opis_zdjecia}'\n"
-                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).")
+                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
+                                            reply_markup=reply_markup) # ZMIANA: Podtrzymaj klawiaturę
         else:
-            await update.message.reply_text(f"❌ Błąd Google Drive: {message}")
+            await update.message.reply_text(f"❌ Błąd Google Drive: {message}",
+                                            reply_markup=reply_markup) # ZMIANA: Podtrzymaj klawiaturę
             
     except Exception as e:
         logger.error(f"Błąd podczas przetwarzania zdjęcia: {e}")
-        await update.message.reply_text(f"❌ Wystąpił błąd przy pobieraniu zdjęcia: {e}")
+        await update.message.reply_text(f"❌ Wystąpił błąd przy pobieraniu zdjęcia: {e}",
+                                        reply_markup=reply_markup) # ZMIANA: Podtrzymaj klawiaturę
 
 
 # --- 8. Uruchomienie Bota (WERSJA RAILWAY/RENDER WEBHOOK) ---
@@ -586,18 +589,14 @@ def main():
     
     logger.info("Uruchamianie bota w trybie WEBHOOK...")
     
-    # PORT jest ustawiany automatycznie przez Railway.
     PORT = int(os.environ.get('PORT', 8443))
     
-    # Railway automatycznie ustawi nazwę domeny jako 'RAILWAY_PUBLIC_DOMAIN'
-    # lub możemy ją ustawić ręcznie jako WEBHOOK_URL
     domain = os.environ.get('RAILWAY_PUBLIC_DOMAIN')
     
     if domain:
         WEBHOOK_URL = f"https://{domain}"
         logger.info(f"Wykryto domenę Railway: {WEBHOOK_URL}")
     else:
-        # Fallback, gdybyśmy musieli ustawić to ręcznie
         WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
         if not WEBHOOK_URL:
             logger.critical("BŁĄD: Nie znaleziono zmiennej RAILWAY_PUBLIC_DOMAIN ani WEBHOOK_URL!")
@@ -613,7 +612,7 @@ def main():
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=TELEGRAM_TOKEN, # Używamy tokenu jako "sekretnego" URL
+        url_path=TELEGRAM_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
     )
     logger.info(f"Bot nasłuchuje na porcie {PORT}")
@@ -621,4 +620,3 @@ def main():
 if __name__ == '__main__':
 
     main()
-
