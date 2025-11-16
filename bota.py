@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import io
-import uuid  # <-- NOWY IMPORT
+import uuid
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -139,19 +139,15 @@ except Exception as e:
 
 
 # --- 4. Konfiguracja Gemini (AI) ---
-genai.configure(api_key=GEMINI_API_KEY)
-generation_config = {
-    "temperature": 0.2,
-    "max_output_tokens": 2048,
-    "response_mime_type": "application/json",
-}
+# POPRAWKA NAZWY MODELU
 model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash",
-    generation_config=generation_config
-)
-
-# --- 5. Definicja Promptu dla AI ---
-PROMPT_SYSTEMOWY = """
+    model_name="gemini-1.5-flash", # Poprawiona nazwa
+    generation_config={
+        "temperature": 0.2,
+        "max_output_tokens": 2048,
+        "response_mime_type": "application/json",
+    },
+    system_instruction="""
 Twoim zadaniem jest analiza zgłoszenia serwisowego. Przetwórz wiadomość użytkownika i wyekstrahuj DOKŁADNIE 3 informacje: numer_lokalu_budynku, rodzaj_usterki, podmiot_odpowiedzialny.
 
 Zawsze odpowiadaj WYŁĄCZNIE w formacie JSON, zgodnie z tym schematem:
@@ -169,8 +165,10 @@ Ustalenia:
 5.  Jeśli wiadomość to 'Rozpoczęcie odbioru', 'rodzaj_usterki' powinien być "Rozpoczęcie odbioru".
 6.  Nigdy nie dodawaj żadnego tekstu przed ani po obiekcie JSON.
 """
+)
 
-# --- ZMIANA: Funkcja tworząca klawiaturę Inline ---
+
+# --- Funkcja tworząca klawiaturę Inline ---
 def get_inline_keyboard(usterka_id=None):
     """
     Tworzy i zwraca klawiaturę inline.
@@ -179,13 +177,11 @@ def get_inline_keyboard(usterka_id=None):
     """
     keyboard = []
     
-    # Dodaj przycisk "Cofnij" tylko jeśli mamy ID konkretnej usterki
     if usterka_id:
         keyboard.append([
             InlineKeyboardButton(f"Cofnij TĘ usterkę ↩️", callback_data=f'cofnij_{usterka_id}')
         ])
     
-    # Przycisk "Zakończ" dodajemy zawsze
     keyboard.append([
         InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='koniec_odbioru')
     ])
@@ -242,7 +238,6 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         
         target_folder = response.get('files', [])
 
-        # --- ZMIANA: Automatyczne tworzenie folderu ---
         if not target_folder:
             logger.warning(f"Nie znaleziono folderu '{target_name}'. Tworzenie nowego...")
             try:
@@ -259,7 +254,6 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
                 return False, f"Błąd tworzenia folderu na Drive: {e}", None
         else:
             target_folder_id = target_folder[0].get('id')
-        # --- KONIEC ZMIANY ---
         
         file_name = f"{usterka_name} - {podmiot_name}.jpg"
         file_metadata = {
@@ -326,7 +320,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- LOGIKA SESJI ODBIORU ---
 
         # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór (Fallback tekstowy)
-        # Zostawiamy na wypadek, gdyby ktoś wolał pisać
         if user_message.lower().strip() == 'koniec odbioru':
             if chat_data.get('odbiur_aktywny'):
                 lokal = chat_data.get('odbiur_lokal_do_arkusza')
@@ -364,15 +357,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 reply_markup=ReplyKeyboardRemove())
             return
 
-        # --- ZMIANA: Usunięto SCENARIUSZ 1.5 (tekstowe 'cofnij') ---
-        # Od teraz cofanie działa tylko przez przyciski inline.
-        
         # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór
         if user_message.lower().startswith('rozpoczęcie odbioru'):
-            logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini po dane sesji...")
+            logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini...")
             await update.message.reply_text("Rozpoczynam odbiór... 🧠 Analizuję dane celu i firmy...")
             
-            response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
+            response = model.generate_content(user_message) # ZMIANA: Usunięto prompt systemowy
             cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             dane_startowe = json.loads(cleaned_text)
             
@@ -408,15 +398,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 f"Firma: {podmiot}\n\n"
                                                 f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
                                                 f"Użyj przycisków poniżej, aby cofnąć lub zakończyć.\n",
-                                                reply_markup=get_inline_keyboard(usterka_id=None)) # <-- ZMIANA: Klawiatura bez "Cofnij"
+                                                reply_markup=get_inline_keyboard(usterka_id=None))
             
             return
 
         # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
         if chat_data.get('odbiur_aktywny'):
-            logger.info(f"Odbiór aktywny. Wysyłanie usterki '{user_message}' do Gemini w celu ekstrakcji...")
+            logger.info(f"Odbiór aktywny. Wysyłanie usterki '{user_message}' do Gemini...")
             
-            response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
+            response = model.generate_content(user_message) # ZMIANA: Usunięto prompt systemowy
             cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             dane_usterki = json.loads(cleaned_text)
             
@@ -424,7 +414,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if usterka_opis == "BRAK DANYCH":
                 usterka_opis = user_message
             
-            # --- ZMIANA: Dodawanie unikalnego ID ---
             usterka_id = str(uuid.uuid4())
             nowy_wpis = {
                 'id': usterka_id,
@@ -432,11 +421,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'opis': usterka_opis
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
-            # --- KONIEC ZMIANY ---
             
             await update.message.reply_text(f"➕ Dodano (tekst): '{usterka_opis}'\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
-                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id)) # <-- ZMIANA: Przekaż ID do klawiatury
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id))
             return
 
     except json.JSONDecodeError as json_err:
@@ -453,7 +441,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text("Przetwarzam jako pojedyncze zgłoszenie... 🧠")
         
-        response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
+        response = model.generate_content(user_message) # ZMIANA: Usunięto prompt systemowy
         cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         dane = json.loads(cleaned_text)
         logger.info(f"Gemini zwróciło JSON: {dane}")
@@ -510,7 +498,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if success:
             opis_zdjecia = f"{usterka} (zdjęcie)"
             
-            # --- ZMIANA: Dodawanie unikalnego ID ---
             usterka_id = str(uuid.uuid4())
             nowy_wpis = {
                 'id': usterka_id,
@@ -518,13 +505,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'opis': opis_zdjecia,
                 'file_id': file_id
             }
+            # --- POPRAWKA LITERÓWKI TUTAJ ---
             chat_data['odbiur_wpisy'].append(nowy_wpis)
-            # --- KONIEC ZMIANY ---
+            # --- KONIEC POPRAWKI ---
             
             await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: '{message}'\n"
                                             f"➕ Usterka dodana do listy: '{opis_zdjecia}'\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
-                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id)) # <-- ZMIANA: Przekaż ID do klawiatury
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id))
         else:
             await update.message.reply_text(f"❌ Błąd Google Drive: {message}",
                                             reply_markup=get_inline_keyboard(usterka_id=None))
@@ -535,7 +523,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         reply_markup=get_inline_keyboard(usterka_id=None))
 
 
-# --- 7c. NOWY HANDLER: Obsługa przycisków Inline ---
+# --- 7c. HANDLER: Obsługa przycisków Inline ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obsługuje naciśnięcia przycisków inline."""
     query = update.callback_query
@@ -543,7 +531,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     
     chat_data = context.chat_data
     
-    # --- ZMIANA: Logika dla 'cofnij' z ID ---
+    # --- Logika dla 'cofnij' z ID ---
     if query.data.startswith('cofnij_'):
         logger.info("Otrzymano callback 'cofnij' z ID")
         if not chat_data.get('odbiur_aktywny'):
@@ -560,7 +548,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         wpisy_lista = chat_data.get('odbiur_wpisy', [])
         wpis_to_delete = None
         
-        # Znajdź wpis po jego unikalnym ID
         for wpis in wpisy_lista:
             if wpis.get('id') == id_to_delete:
                 wpis_to_delete = wpis
@@ -569,22 +556,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         if not wpis_to_delete:
             logger.warning(f"Próbowano usunąć usterkę {id_to_delete}, ale już nie istnieje.")
             await query.answer("Ta usterka została już usunięta.", show_alert=True)
-            # Edytuj oryginalną wiadomość, aby pokazać, że jest nieaktywna
             try:
                 await query.edit_message_text(f"--- TA USTERKA ZOSTAŁA JUŻ USUNIĘTA ---\n({query.message.text})", reply_markup=None)
             except Exception:
-                pass # Ignoruj błędy edycji
+                pass
             return
 
-        # Znaleziono! Usuwamy wpis.
         try:
             opis_usunietego = wpis_to_delete.get('opis', 'NIEZNANY WPIS')
-            wpisy_lista.remove(wpis_to_delete) # Usunięcie z listy
+            wpisy_lista.remove(wpis_to_delete)
             chat_data['odbiur_wpisy'] = wpisy_lista
             
             delete_feedback = f"↩️ Usunięto: '{opis_usunietego}'"
 
-            # Jeśli to było zdjęcie, usuń je z Google Drive
             if wpis_to_delete.get('typ') == 'zdjecie':
                 file_id_to_delete = wpis_to_delete.get('file_id')
                 if file_id_to_delete:
@@ -594,13 +578,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     else:
                         delete_feedback += f"\n(BŁĄD usuwania z Drive: {delete_error})."
             
-            # Edytuj oryginalną wiadomość, aby usunąć przyciski
             try:
                 await query.edit_message_text(f"--- USUNIĘTO: {opis_usunietego} ---", reply_markup=None)
             except Exception:
-                pass # Ignoruj błędy (np. jeśli wiadomość jest za stara)
+                pass
 
-            # Wyślij NOWĄ wiadomość z potwierdzeniem i klawiaturą "Zakończ"
             await query.message.reply_text(f"{delete_feedback}\n(Pozostało: {len(wpisy_lista)}).", 
                                            reply_markup=get_inline_keyboard(usterka_id=None))
         
@@ -608,9 +590,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             logger.error(f"Błąd podczas usuwania wpisu: {e}")
             await query.answer(f"Błąd: {e}", show_alert=True)
 
-    # --- KONIEC ZMIANY ---
-
-    # --- Logika dla 'koniec_odbioru' (bez zmian) ---
+    # --- Logika dla 'koniec_odbioru' ---
     elif query.data == 'koniec_odbioru':
         logger.info("Otrzymano callback 'koniec_odbioru'")
         if not chat_data.get('odbiur_aktywny'):
@@ -649,7 +629,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         chat_data.clear()
         
-        # Edytuj wiadomość, na której kliknięto, by usunąć przyciski
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception as e:
@@ -678,7 +657,7 @@ def main():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(CallbackQueryHandler(handle_callback_query)) # Bez zmian
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
 
     logger.info(f"Ustawianie webhooka na: {WEBHOOK_URL}")
     application.run_webhook(
@@ -691,4 +670,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
