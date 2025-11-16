@@ -141,7 +141,7 @@ except Exception as e:
 # --- 4. Konfiguracja Gemini (AI) ---
 # POPRAWKA NAZWY MODELU
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash", # Poprawiona nazwa
+    model_name="gemini-2.5-flash", # Poprawiona nazwa
     generation_config={
         "temperature": 0.2,
         "max_output_tokens": 2048,
@@ -670,3 +670,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
