@@ -15,7 +15,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Application, MessageHandler, filters, ContextTypesp
+
 
 # --- 1. Konfiguracja Logowania (Ważne do debugowania) ---
 logging.basicConfig(
@@ -188,7 +190,11 @@ Ustalenia:
 
 Wiadomość użytkownika do analizy znajduje się poniżej.
 """
-
+# --- NOWOŚĆ: Definicja Klawiatury ---
+KLAWIATURA_ODBIORU = [
+    ["Cofnij ↩️"],
+    ["Koniec odbioru 🏁"]
+]
 # --- 6. Funkcja do Zapisu w Arkuszu ---
 # ZMIANA: Dodano obsługę 'link_do_zdjecia'
 def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
@@ -318,7 +324,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- LOGIKA SESJI ODBIORU ---
 
         # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór
-        if user_message.lower().strip() == 'koniec odbioru':
+        # <-- ZMIANA: Używamy .startswith() aby emoji nie przeszkadzało
+        if user_message.lower().strip().startswith('koniec odbioru'):
             if chat_data.get('odbiur_aktywny'):
                 lokal = chat_data.get('odbiur_lokal_do_arkusza')
                 podmiot = chat_data.get('odbiur_podmiot')
@@ -326,21 +333,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 wpisy_lista = chat_data.get('odbiur_wpisy', [])
                 
                 if not wpisy_lista:
-                    await update.message.reply_text(f"Zakończono odbiór dla lokalu {lokal}. Nie dodano żadnych usterek.")
+                    await update.message.reply_text(f"Zakończono odbiór dla lokalu {lokal}. Nie dodano żadnych usterek.",
+                                                    reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
                 else:
                     logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla lokalu {lokal}...")
                     licznik_zapisanych = 0
                     
-                    # ZMIANA: Pętla dodająca linki do zdjęć
                     for wpis in wpisy_lista:
-                        
                         dane_json = {
                             "numer_lokalu_budynku": lokal,
                             "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'),
                             "podmiot_odpowiedzialny": podmiot,
-                            "link_do_zdjecia": "" # Domyślnie pusty link
+                            "link_do_zdjecia": ""
                         }
-
                         file_id_ze_zdjecia = wpis.get('file_id')
                         if file_id_ze_zdjecia:
                             link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
@@ -349,17 +354,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if zapisz_w_arkuszu(dane_json, message_time):
                             licznik_zapisanych += 1
                     
-                    # POPRAWKA WCIĘCIA: Ta linia jest na równi z 'if not wpisy_lista:' i 'else:'
-                    await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla lokalu {lokal}.")
+                    await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla lokalu {lokal}.",
+                                                    reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
                 
-                # POPRAWKA WCIĘCIA: Ta linia jest na równi z 'if not wpisy_lista:' i 'else:'
                 chat_data.clear()
             else:
-                await update.message.reply_text("Żaden odbiór nie jest aktywny. Aby zakończyć, musisz najpierw go rozpocząć.")
+                await update.message.reply_text("Żaden odbiór nie jest aktywny. Aby zakończyć, musisz najpierw go rozpocząć.",
+                                                reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę (na wszelki wypadek)
             return
 
         # --- NOWOŚĆ: SCENARIUSZ 1.5: Użytkownik COFA ostatnią akcję ---
-        if user_message.lower().strip() == 'cofnij':
+        # <-- ZMIANA: Używamy .startswith() aby emoji nie przeszkadzało
+        if user_message.lower().strip().startswith('cofnij'):
             if not chat_data.get('odbiur_aktywny'):
                 await update.message.reply_text("Nie można cofnąć. Żaden odbiór nie jest aktywny.")
                 return
@@ -370,19 +376,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             try:
-                # Usuwamy ostatni wpis z listy
+                # ... (cała logika cofania bez zmian) ...
                 ostatni_wpis = wpisy_lista.pop()
-                chat_data['odbiur_wpisy'] = wpisy_lista # Nadpisujemy listę w chat_data
+                chat_data['odbiur_wpisy'] = wpisy_lista
                 
                 opis_usunietego = ostatni_wpis.get('opis', 'NIEZNANY WPIS')
                 
-                # Jeśli to było zdjęcie, usuwamy je też z Google Drive
                 if ostatni_wpis.get('typ') == 'zdjecie':
                     file_id_to_delete = ostatni_wpis.get('file_id')
                     
                     if file_id_to_delete:
                         logger.info(f"Cofanie zdjęcia. Usuwanie pliku z Drive: {file_id_to_delete}")
-                        
                         delete_success, delete_error = delete_file_from_drive(file_id_to_delete)
                         
                         if delete_success:
@@ -397,8 +401,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.warning("Wpis 'zdjecie' nie miał file_id. Usunięto tylko wpis z listy.")
                         await update.message.reply_text(f"↩️ Cofnięto wpis (bez ID pliku):\n'{opis_usunietego}'\n"
                                                         f"(Pozostało: {len(wpisy_lista)}).")
-                
-                # Jeśli to był tekst (lub cokolwiek innego)
                 else:
                     await update.message.reply_text(f"↩️ Cofnięto wpis tekstowy:\n'{opis_usunietego}'\n"
                                                     f"(Pozostało: {len(wpisy_lista)}).")
@@ -425,33 +427,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Nie udało się rozpoznać celu (lokalu/szeregu) lub firmy.\n"
                                                 "Spróbuj ponownie, np: \n"
                                                 "'Rozpoczęcie odbioru, lokal 46/2, firma X'\n"
-                                                "'Rozpoczęcie odbioru, SZEREG 5, firma Y'")
+                                                "'Rozpoczęcie odbioru, SZEREG 5, firma Y'",
+                                                reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
             else:
                 target_name = ""
                 tryb_odbioru = ""
                 
-                # NOWA LOGIKA: Sprawdź czy to lokal czy szereg
                 if "szereg" in lokal_raw.lower():
                     tryb_odbioru = "szereg"
-                    target_name = lokal_raw.upper().strip() # np. "SZEREG 5"
+                    target_name = lokal_raw.upper().strip()
                 else:
                     tryb_odbioru = "lokal"
-                    target_name = lokal_raw.lower().replace("lokal", "").strip().replace("/", ".") # np. "46.2"
+                    target_name = lokal_raw.lower().replace("lokal", "").strip().replace("/", ".")
                 
                 chat_data['odbiur_aktywny'] = True
-                chat_data['odbiur_lokal_do_arkusza'] = target_name # Tego użyjemy do zapisu w Arkuszu
-                chat_data['odbiur_target_nazwa'] = target_name    # Tego użyjemy do wysyłania na Drive
-                chat_data['tryb_odbioru'] = tryb_odbioru           # Tego użyjemy do wysyłania na Drive
+                chat_data['odbiur_lokal_do_arkusza'] = target_name
+                chat_data['odbiur_target_nazwa'] = target_name
+                chat_data['tryb_odbioru'] = tryb_odbioru
                 chat_data['odbiur_podmiot'] = podmiot
-                
                 chat_data['odbiur_wpisy'] = []
+                
+                # <-- ZMIANA: Stwórz instancję klawiatury
+                reply_markup = ReplyKeyboardMarkup(KLAWIATURA_ODBIORU, resize_keyboard=True)
                 
                 await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
                                                 f"Cel: {target_name}\n"
                                                 f"Firma: {podmiot}\n\n"
                                                 f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
-                                                f"Wpisz 'cofnij', aby usunąć ostatni wpis.\n"
-                                                f"Zakończ pisząc 'Koniec odbioru'.")
+                                                f"Użyj przycisków na dole, aby cofnąć lub zakończyć.\n" # <-- ZMIANA: Lepszy tekst
+                                                f"Zakończ pisząc 'Koniec odbioru'.",
+                                                reply_markup=reply_markup) # <-- ZMIANA: Pokaż klawiaturę
             
             return
 
@@ -473,8 +478,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
+            # <-- ZMIANA: Dodajemy klawiaturę do odpowiedzi, aby nie zniknęła
+            reply_markup = ReplyKeyboardMarkup(KLAWIATURA_ODBIORU, resize_keyboard=True)
             await update.message.reply_text(f"➕ Dodano (tekst): '{usterka_opis}'\n"
-                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}). Wpisz kolejną, 'cofnij' lub 'Koniec odbioru'.")
+                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}). Wpisz kolejną, 'cofnij' lub 'Koniec odbioru'.",
+                                            reply_markup=reply_markup) # <-- ZMIANA: Podtrzymaj klawiaturę
             return
 
     except json.JSONDecodeError as json_err:
@@ -501,11 +509,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Gemini zwróciło JSON: {dane}")
 
         if zapisz_w_arkuszu(dane, message_time):
-            # POPRAWKA WCIĘCIA: Te linie f"..." są na tym samym poziomie co 'await'
             await update.message.reply_text(f"✅ Zgłoszenie (pojedyncze) przyjęte i zapisane:\n\n"
                                             f"Lokal: {dane.get('numer_lokalu_budynku')}\n"
                                             f"Usterka: {dane.get('rodzaj_usterki')}\n"
-                                            f"Podmiot: {dane.get('podmiot_odpowiedzialny')}")
+                                            f"Podmiot: {dane.get('podmiot_odpowiedzialny')}",
+                                            reply_markup=ReplyKeyboardRemove()) # <-- ZMIANA: Ukryj klawiaturę
         else:
             await update.message.reply_text("❌ Błąd zapisu do bazy danych (Arkusza). Skontaktuj się z adminem.")
 
@@ -515,7 +523,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Wystąpił nieoczekiwany błąd (fallback): {e}")
         await update.message.reply_text(f"❌ Wystąpił krytyczny błąd (fallback): {e}")
-
 
 # --- 7b. NOWY HANDLER DLA ZDJĘĆ ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -614,3 +621,4 @@ def main():
 if __name__ == '__main__':
 
     main()
+
