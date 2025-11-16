@@ -518,7 +518,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'opis': opis_zdjecia,
                 'file_id': file_id
             }
-            chat_data['odbiur_wpisy'].append(nowy_wpIS)
+            chat_data['odbiur_wpisy'].append(nowy_wpis)
             # --- KONIEC ZMIANY ---
             
             await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: '{message}'\n"
@@ -691,3 +691,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
