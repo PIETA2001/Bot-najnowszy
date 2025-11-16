@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import io
+import uuid  # <-- NOWY IMPORT
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -14,7 +15,6 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
-# --- ZMIANA IMPORTÓW ---
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
@@ -84,7 +84,6 @@ def get_google_creds():
             creds.refresh(Request())
         else:
             logger.info("Brak tokenu lub token nieprawidłowy. Uruchamianie przepływu autoryzacji...")
-            # ... (logika dla logowania lokalnego) ...
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_FILE, SCOPES)
                 creds = flow.run_local_server(port=0)
@@ -99,21 +98,17 @@ def get_google_creds():
     return creds
 
 try:
-    # --- 3a. Pobranie danych logowania (OAuth) ---
     creds = get_google_creds()
     logger.info("Pomyślnie uzyskano dane logowania Google (OAuth 2.0)")
-
-    # --- 3b. Konfiguracja Google Sheets (gspread) ---
+    
     gc = gspread.authorize(creds)
     spreadsheet = gc.open(GOOGLE_SHEET_NAME)
     worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
     logger.info(f"Pomyślnie połączono z Arkuszem Google: {GOOGLE_SHEET_NAME}")
 
-    # --- 3c. Konfiguracja Google Drive ---
     drive_service = build('drive', 'v3', credentials=creds)
     logger.info("Pomyślnie połączono z Google Drive")
 
-    # Funkcja pomocnicza do wyszukiwania folderu
     def find_folder(folder_name):
         logger.info(f"Szukanie folderu: '{folder_name}'...")
         response_folder = drive_service.files().list(
@@ -131,7 +126,6 @@ try:
         logger.info(f"Pomyślnie znaleziono folder '{folder_name}' (ID: {folder_id})")
         return folder_id
 
-    # Wyszukaj oba foldery
     g_drive_main_folder_id = find_folder(G_DRIVE_MAIN_FOLDER_NAME)
     g_drive_szeregi_folder_id = find_folder(G_DRIVE_SZEREGI_FOLDER_NAME)
 
@@ -176,15 +170,26 @@ Ustalenia:
 6.  Nigdy nie dodawaj żadnego tekstu przed ani po obiekcie JSON.
 """
 
-# --- NOWOŚĆ: Funkcja tworząca klawiaturę Inline ---
-def get_inline_keyboard():
-    """Tworzy i zwraca klawiaturę inline."""
-    keyboard = [
-        [
-            InlineKeyboardButton("Cofnij ↩️", callback_data='cofnij'),
-            InlineKeyboardButton("Zakończ Odbiór 🏁", callback_data='koniec_odbioru')
-        ]
-    ]
+# --- ZMIANA: Funkcja tworząca klawiaturę Inline ---
+def get_inline_keyboard(usterka_id=None):
+    """
+    Tworzy i zwraca klawiaturę inline.
+    Jeśli podano usterka_id, dodaje przycisk "Cofnij" z tym ID.
+    Zawsze dodaje przycisk "Zakończ Odbiór".
+    """
+    keyboard = []
+    
+    # Dodaj przycisk "Cofnij" tylko jeśli mamy ID konkretnej usterki
+    if usterka_id:
+        keyboard.append([
+            InlineKeyboardButton(f"Cofnij TĘ usterkę ↩️", callback_data=f'cofnij_{usterka_id}')
+        ])
+    
+    # Przycisk "Zakończ" dodajemy zawsze
+    keyboard.append([
+        InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='koniec_odbioru')
+    ])
+    
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -215,7 +220,6 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
     global drive_service, g_drive_main_folder_id, g_drive_szeregi_folder_id, G_DRIVE_MAIN_FOLDER_NAME, G_DRIVE_SZEREGI_FOLDER_NAME
     
     try:
-        # Krok 1: Wybierz nadrzędny folder na podstawie trybu
         parent_folder_id = None
         parent_folder_name = ""
         
@@ -226,10 +230,8 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
             parent_folder_id = g_drive_szeregi_folder_id
             parent_folder_name = G_DRIVE_SZEREGI_FOLDER_NAME
         else:
-            logger.error(f"Nierozpoznany tryb odbioru: {tryb_odbioru}")
             return False, f"Nierozpoznany tryb: {tryb_odbioru}", None
 
-        # Krok 2: Znajdź podfolder
         q_str = f"name='{target_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=False"
         
         response = drive_service.files().list(
@@ -240,20 +242,31 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         
         target_folder = response.get('files', [])
 
+        # --- ZMIANA: Automatyczne tworzenie folderu ---
         if not target_folder:
-            logger.error(f"Nie znaleziono folderu dla celu: {target_name} wewnątrz '{parent_folder_name}'")
-            return False, f"Nie znaleziono folderu Drive dla '{target_name}' w '{parent_folder_name}'", None
-
-        target_folder_id = target_folder[0].get('id')
+            logger.warning(f"Nie znaleziono folderu '{target_name}'. Tworzenie nowego...")
+            try:
+                folder_metadata = {
+                    'name': target_name,
+                    'mimeType': 'application/vnd.google-apps.folder',
+                    'parents': [parent_folder_id]
+                }
+                created_folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+                target_folder_id = created_folder.get('id')
+                logger.info(f"Pomyślnie utworzono folder '{target_name}' (ID: {target_folder_id})")
+            except Exception as e:
+                logger.error(f"KRYTYCZNY BŁĄD: Nie można utworzyć folderu na Drive: {e}")
+                return False, f"Błąd tworzenia folderu na Drive: {e}", None
+        else:
+            target_folder_id = target_folder[0].get('id')
+        # --- KONIEC ZMIANY ---
         
-        # Krok 3: Przygotuj metadane i plik
         file_name = f"{usterka_name} - {podmiot_name}.jpg"
         file_metadata = {
             'name': file_name,
             'parents': [target_folder_id]
         }
         
-        # Krok 4: Wyślij plik
         file_bytes.seek(0)
         media = MediaIoBaseUpload(file_bytes, mimetype='image/jpeg', resumable=True)
         
@@ -313,11 +326,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- LOGIKA SESJI ODBIORU ---
 
         # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór (Fallback tekstowy)
+        # Zostawiamy na wypadek, gdyby ktoś wolał pisać
         if user_message.lower().strip() == 'koniec odbioru':
             if chat_data.get('odbiur_aktywny'):
                 lokal = chat_data.get('odbiur_lokal_do_arkusza')
                 podmiot = chat_data.get('odbiur_podmiot')
-                
                 wpisy_lista = chat_data.get('odbiur_wpisy', [])
                 
                 if not wpisy_lista:
@@ -351,45 +364,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 reply_markup=ReplyKeyboardRemove())
             return
 
-        # --- SCENARIUSZ 1.5: Użytkownik COFA (Fallback tekstowy) ---
-        if user_message.lower().strip() == 'cofnij':
-            if not chat_data.get('odbiur_aktywny'):
-                await update.message.reply_text("Nie można cofnąć. Żaden odbiór nie jest aktywny.")
-                return
-            
-            wpisy_lista = chat_data.get('odbiur_wpisy', [])
-            if not wpisy_lista:
-                await update.message.reply_text("Nie można cofnąć. Lista usterek jest już pusta.")
-                return
-
-            try:
-                ostatni_wpis = wpisy_lista.pop()
-                chat_data['odbiur_wpisy'] = wpisy_lista
-                opis_usunietego = ostatni_wpis.get('opis', 'NIEZNANY WPIS')
-                
-                if ostatni_wpis.get('typ') == 'zdjecie':
-                    file_id_to_delete = ostatni_wpis.get('file_id')
-                    if file_id_to_delete:
-                        delete_success, delete_error = delete_file_from_drive(file_id_to_delete)
-                        if delete_success:
-                            await update.message.reply_text(f"↩️ Cofnięto i usunięto zdjęcie:\n'{opis_usunietego}'\n"
-                                                            f"(Pozostało: {len(wpisy_lista)}).", reply_markup=get_inline_keyboard()) # ZMIANA
-                        else:
-                            await update.message.reply_text(f"↩️ Cofnięto wpis: '{opis_usunietego}'.\n"
-                                                            f"⚠️ BŁĄD: Nie udało się usunąć pliku z Google Drive: {delete_error}", reply_markup=get_inline_keyboard()) # ZMIANA
-                    else:
-                         await update.message.reply_text(f"↩️ Cofnięto wpis (bez ID pliku):\n'{opis_usunietego}'\n"
-                                                        f"(Pozostało: {len(wpisy_lista)}).", reply_markup=get_inline_keyboard()) # ZMIANA
-                else:
-                    await update.message.reply_text(f"↩️ Cofnięto wpis tekstowy:\n'{opis_usunietego}'\n"
-                                                    f"(Pozostało: {len(wpisy_lista)}).", reply_markup=get_inline_keyboard()) # ZMIANA
-            
-            except Exception as e:
-                logger.error(f"Błąd podczas operacji 'cofnij': {e}")
-                await update.message.reply_text(f"❌ Wystąpił błąd podczas cofania: {e}", reply_markup=get_inline_keyboard()) # ZMIANA
-            
-            return
-
+        # --- ZMIANA: Usunięto SCENARIUSZ 1.5 (tekstowe 'cofnij') ---
+        # Od teraz cofanie działa tylko przez przyciski inline.
+        
         # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór
         if user_message.lower().startswith('rozpoczęcie odbioru'):
             logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini po dane sesji...")
@@ -431,7 +408,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 f"Firma: {podmiot}\n\n"
                                                 f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
                                                 f"Użyj przycisków poniżej, aby cofnąć lub zakończyć.\n",
-                                                reply_markup=get_inline_keyboard()) # <-- ZMIANA: Pokaż klawiaturę INLINE
+                                                reply_markup=get_inline_keyboard(usterka_id=None)) # <-- ZMIANA: Klawiatura bez "Cofnij"
             
             return
 
@@ -446,16 +423,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             usterka_opis = dane_usterki.get('rodzaj_usterki', user_message)
             if usterka_opis == "BRAK DANYCH":
                 usterka_opis = user_message
-                
+            
+            # --- ZMIANA: Dodawanie unikalnego ID ---
+            usterka_id = str(uuid.uuid4())
             nowy_wpis = {
+                'id': usterka_id,
                 'typ': 'tekst',
                 'opis': usterka_opis
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
+            # --- KONIEC ZMIANY ---
             
             await update.message.reply_text(f"➕ Dodano (tekst): '{usterka_opis}'\n"
-                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}). Wpisz kolejną, 'cofnij' lub 'Koniec odbioru'.",
-                                            reply_markup=get_inline_keyboard()) # <-- ZMIANA: Pokaż klawiaturę INLINE
+                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id)) # <-- ZMIANA: Przekaż ID do klawiatury
             return
 
     except json.JSONDecodeError as json_err:
@@ -468,15 +449,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- LOGIKA DOMYŚLNA (FALLBACK) ---
-    
     logger.info(f"Brak aktywnego odbioru. Przetwarzanie jako pojedyncze zgłoszenie: '{user_message}'")
-    
     try:
         await update.message.reply_text("Przetwarzam jako pojedyncze zgłoszenie... 🧠")
         
-        logger.info("Wysyłanie do Gemini...")
         response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
-        
         cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         dane = json.loads(cleaned_text)
         logger.info(f"Gemini zwróciło JSON: {dane}")
@@ -511,7 +488,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usterka = update.message.caption
     if not usterka:
         await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!\nInaczej nie wiem, co zapisać. Wyślij ponownie z opisem.",
-                                        reply_markup=get_inline_keyboard()) # <-- ZMIANA
+                                        reply_markup=get_inline_keyboard(usterka_id=None))
         return
 
     podmiot = chat_data.get('odbiur_podmiot')
@@ -519,98 +496,121 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tryb = chat_data.get('tryb_odbioru')
     
     await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{usterka}'. Przetwarzam i wysyłam na Drive...",
-                                    reply_markup=get_inline_keyboard()) # <-- ZMIANA
+                                    reply_markup=get_inline_keyboard(usterka_id=None))
 
     try:
         photo_file = await update.message.photo[-1].get_file()
-        
         file_bytes_io = io.BytesIO()
         await photo_file.download_to_memory(file_bytes_io)
         
         success, message, file_id = upload_photo_to_drive(
-            file_bytes_io,
-            target_name,
-            usterka,
-            podmiot,
-            tryb_odbioru=tryb
+            file_bytes_io, target_name, usterka, podmiot, tryb_odbioru=tryb
         )
         
         if success:
             opis_zdjecia = f"{usterka} (zdjęcie)"
             
+            # --- ZMIANA: Dodawanie unikalnego ID ---
+            usterka_id = str(uuid.uuid4())
             nowy_wpis = {
+                'id': usterka_id,
                 'typ': 'zdjecie',
                 'opis': opis_zdjecia,
                 'file_id': file_id
             }
-            chat_data['odbiur_wpisy'].append(nowy_wpis)
+            chat_data['odbiur_wpisy'].append(nowy_wpIS)
+            # --- KONIEC ZMIANY ---
             
             await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: '{message}'\n"
                                             f"➕ Usterka dodana do listy: '{opis_zdjecia}'\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
-                                            reply_markup=get_inline_keyboard()) # <-- ZMIANA
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id)) # <-- ZMIANA: Przekaż ID do klawiatury
         else:
             await update.message.reply_text(f"❌ Błąd Google Drive: {message}",
-                                            reply_markup=get_inline_keyboard()) # <-- ZMIANA
+                                            reply_markup=get_inline_keyboard(usterka_id=None))
             
     except Exception as e:
         logger.error(f"Błąd podczas przetwarzania zdjęcia: {e}")
         await update.message.reply_text(f"❌ Wystąpił błąd przy pobieraniu zdjęcia: {e}",
-                                        reply_markup=get_inline_keyboard()) # <-- ZMIANA
+                                        reply_markup=get_inline_keyboard(usterka_id=None))
 
 
 # --- 7c. NOWY HANDLER: Obsługa przycisków Inline ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obsługuje naciśnięcia przycisków inline."""
     query = update.callback_query
-    
-    # Ważne: Zawsze odpowiadaj na callback, inaczej klient Telegrama będzie czekał
-    await query.answer() 
+    await query.answer()
     
     chat_data = context.chat_data
     
-    # --- LOGIKA COFNIJ (skopiowana z handle_message) ---
-    if query.data == 'cofnij':
-        logger.info("Otrzymano callback 'cofnij'")
+    # --- ZMIANA: Logika dla 'cofnij' z ID ---
+    if query.data.startswith('cofnij_'):
+        logger.info("Otrzymano callback 'cofnij' z ID")
         if not chat_data.get('odbiur_aktywny'):
-            await query.message.reply_text("Nie można cofnąć. Żaden odbiór nie jest aktywny.")
-            return
-        
-        wpisy_lista = chat_data.get('odbiur_wpisy', [])
-        if not wpisy_lista:
-            await query.message.reply_text("Nie można cofnąć. Lista usterek jest już pusta.")
+            await query.message.reply_text("Sesja już się zakończyła.", reply_markup=ReplyKeyboardRemove())
             return
 
         try:
-            ostatni_wpis = wpisy_lista.pop()
+            id_to_delete = query.data.split('_', 1)[1]
+        except Exception as e:
+            logger.error(f"Nie można sparsować ID z callback: {query.data} - {e}")
+            await query.answer("Błąd: Nieprawidłowy format ID.", show_alert=True)
+            return
+
+        wpisy_lista = chat_data.get('odbiur_wpisy', [])
+        wpis_to_delete = None
+        
+        # Znajdź wpis po jego unikalnym ID
+        for wpis in wpisy_lista:
+            if wpis.get('id') == id_to_delete:
+                wpis_to_delete = wpis
+                break
+
+        if not wpis_to_delete:
+            logger.warning(f"Próbowano usunąć usterkę {id_to_delete}, ale już nie istnieje.")
+            await query.answer("Ta usterka została już usunięta.", show_alert=True)
+            # Edytuj oryginalną wiadomość, aby pokazać, że jest nieaktywna
+            try:
+                await query.edit_message_text(f"--- TA USTERKA ZOSTAŁA JUŻ USUNIĘTA ---\n({query.message.text})", reply_markup=None)
+            except Exception:
+                pass # Ignoruj błędy edycji
+            return
+
+        # Znaleziono! Usuwamy wpis.
+        try:
+            opis_usunietego = wpis_to_delete.get('opis', 'NIEZNANY WPIS')
+            wpisy_lista.remove(wpis_to_delete) # Usunięcie z listy
             chat_data['odbiur_wpisy'] = wpisy_lista
-            opis_usunietego = ostatni_wpis.get('opis', 'NIEZNANY WPIS')
             
-            if ostatni_wpis.get('typ') == 'zdjecie':
-                file_id_to_delete = ostatni_wpis.get('file_id')
+            delete_feedback = f"↩️ Usunięto: '{opis_usunietego}'"
+
+            # Jeśli to było zdjęcie, usuń je z Google Drive
+            if wpis_to_delete.get('typ') == 'zdjecie':
+                file_id_to_delete = wpis_to_delete.get('file_id')
                 if file_id_to_delete:
-                    logger.info(f"Cofanie zdjęcia z callback. Usuwanie pliku z Drive: {file_id_to_delete}")
                     delete_success, delete_error = delete_file_from_drive(file_id_to_delete)
-                    
                     if delete_success:
-                        # Odpowiadamy na wiadomość i ponownie wysyłamy klawiaturę
-                        await query.message.reply_text(f"↩️ Cofnięto i usunięto zdjęcie:\n'{opis_usunietego}'\n"
-                                                       f"(Pozostało: {len(wpisy_lista)}).", reply_markup=get_inline_keyboard())
+                        delete_feedback += "\n(Pomyślnie usunięto z Google Drive)."
                     else:
-                        await query.message.reply_text(f"↩️ Cofnięto wpis: '{opis_usunietego}'.\n"
-                                                       f"⚠️ BŁĄD: Nie udało się usunąć pliku z Google Drive: {delete_error}", reply_markup=get_inline_keyboard())
-                else:
-                     await query.message.reply_text(f"↩️ Cofnięto wpis (bez ID pliku):\n'{opis_usunietego}'\n"
-                                                    f"(Pozostało: {len(wpisy_lista)}).", reply_markup=get_inline_keyboard())
-            else:
-                await query.message.reply_text(f"↩️ Cofnięto wpis tekstowy:\n'{opis_usunietego}'\n"
-                                                f"(Pozostało: {len(wpisy_lista)}).", reply_markup=get_inline_keyboard())
+                        delete_feedback += f"\n(BŁĄD usuwania z Drive: {delete_error})."
+            
+            # Edytuj oryginalną wiadomość, aby usunąć przyciski
+            try:
+                await query.edit_message_text(f"--- USUNIĘTO: {opis_usunietego} ---", reply_markup=None)
+            except Exception:
+                pass # Ignoruj błędy (np. jeśli wiadomość jest za stara)
+
+            # Wyślij NOWĄ wiadomość z potwierdzeniem i klawiaturą "Zakończ"
+            await query.message.reply_text(f"{delete_feedback}\n(Pozostało: {len(wpisy_lista)}).", 
+                                           reply_markup=get_inline_keyboard(usterka_id=None))
         
         except Exception as e:
-            logger.error(f"Błąd podczas operacji 'cofnij' (callback): {e}")
-            await query.message.reply_text(f"❌ Wystąpił błąd podczas cofania: {e}", reply_markup=get_inline_keyboard())
+            logger.error(f"Błąd podczas usuwania wpisu: {e}")
+            await query.answer(f"Błąd: {e}", show_alert=True)
 
-    # --- LOGIKA KONIEC ODBIORU (skopiowana z handle_message) ---
+    # --- KONIEC ZMIANY ---
+
+    # --- Logika dla 'koniec_odbioru' (bez zmian) ---
     elif query.data == 'koniec_odbioru':
         logger.info("Otrzymano callback 'koniec_odbioru'")
         if not chat_data.get('odbiur_aktywny'):
@@ -620,8 +620,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         lokal = chat_data.get('odbiur_lokal_do_arkusza')
         podmiot = chat_data.get('odbiur_podmiot')
         wpisy_lista = chat_data.get('odbiur_wpisy', [])
-        
-        # W callbacku nie mamy czasu wiadomości, więc bierzemy aktualny
         message_time = datetime.now() 
         
         if not wpisy_lista:
@@ -651,14 +649,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         chat_data.clear()
         
-        # Po zakończeniu, edytujemy wiadomość z przyciskami, aby je usunąć
+        # Edytuj wiadomość, na której kliknięto, by usunąć przyciski
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception as e:
-            logger.warning(f"Nie można edytować starej wiadomości (to normalne, jeśli została usunięta): {e}")
+            logger.warning(f"Nie można edytować starej wiadomości: {e}")
 
 
-# --- 8. Uruchomienie Bota (WERSJA RAILWAY/RENDER WEBHOOK) ---
+# --- 8. Uruchomienie Bota ---
 def main():
     """Główna funkcja uruchamiająca bota dla hostingu."""
     
@@ -680,11 +678,8 @@ def main():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    # --- NOWA LINIA: Dodanie handlera dla przycisków ---
-    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    application.add_handler(CallbackQueryHandler(handle_callback_query)) # Bez zmian
 
-    # Konfiguracja webhooka
     logger.info(f"Ustawianie webhooka na: {WEBHOOK_URL}")
     application.run_webhook(
         listen="0.0.0.0",
@@ -695,5 +690,4 @@ def main():
     logger.info(f"Bot nasłuchuje na porcie {PORT}")
 
 if __name__ == '__main__':
-
     main()
