@@ -34,8 +34,8 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     exit()
 
 # --- 3. NOWA KONFIGURACJA (OAuth 2.0 zamiast Service Account) ---
-GOOGLE_CREDENTIALS_FILE = 'credentials.json' 
-GOOGLE_TOKEN_FILE = 'token.json' 
+GOOGLE_CREDENTIALS_FILE = 'credentials.json'
+GOOGLE_TOKEN_FILE = 'token.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 GOOGLE_SHEET_NAME = 'Odbiory_Kolonia_Warszawska'
 WORKSHEET_NAME = 'Arkusz1'
@@ -45,7 +45,7 @@ G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi' # <-- NOWA LINIA
 gc = None
 worksheet = None
 drive_service = None
-g_drive_main_folder_id = None 
+g_drive_main_folder_id = None
 g_drive_szeregi_folder_id = None # <-- NOWA LINIA
 
 def get_google_creds():
@@ -94,11 +94,11 @@ def get_google_creds():
             # pomyślnie utworzony w Kroku 1 (powyżej)
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_FILE, SCOPES)
-                creds = flow.run_local_server(port=0) 
+                creds = flow.run_local_server(port=0)
             except Exception as e:
                 logger.critical(f"BŁĄD KRYTYCZNY PRZY AUTORYZACJI: {e}")
                 logger.critical("Upewnij się, że plik 'credentials.json' istnieje lub zmienna GOOGLE_CREDENTIALS_JSON jest ustawiona.")
-                exit() 
+                exit()
 
         # Zapisz zaktualizowany token (szczególnie po odświeżeniu)
         with open(GOOGLE_TOKEN_FILE, 'w') as token:
@@ -113,7 +113,7 @@ try:
     logger.info("Pomyślnie uzyskano dane logowania Google (OAuth 2.0)")
 
     # --- 3b. Konfiguracja Google Sheets (gspread) ---
-    gc = gspread.authorize(creds) 
+    gc = gspread.authorize(creds)
     spreadsheet = gc.open(GOOGLE_SHEET_NAME)
     worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
     logger.info(f"Pomyślnie połączono z Arkuszem Google: {GOOGLE_SHEET_NAME}")
@@ -160,15 +160,14 @@ genai.configure(api_key=GEMINI_API_KEY)
 generation_config = {
     "temperature": 0.2,
     "max_output_tokens": 2048,
-    "response_mime_type": "application/json", 
+    "response_mime_type": "application/json",
 }
 model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash", 
+    model_name="gemini-2.5-flash",
     generation_config=generation_config
 )
 
 # --- 5. Definicja Promptu dla AI ---
-# ZMIANA: Zaktualizowano zasady 3 i 5
 PROMPT_SYSTEMOWY = """
 Twoim zadaniem jest analiza zgłoszenia serwisowego. Przetwórz wiadomość użytkownika i wyekstrahuj DOKŁADNIE 3 informacje: numer_lokalu_budynku, rodzaj_usterki, podmiot_odpowiedzialny.
 
@@ -191,14 +190,13 @@ Wiadomość użytkownika do analizy znajduje się poniżej.
 """
 
 # --- 6. Funkcja do Zapisu w Arkuszu ---
-# ZMIANA TUTAJ: Dodano obsługę 'link_do_zdjecia'
+# ZMIANA: Dodano obsługę 'link_do_zdjecia'
 def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
     """Zapisuje przeanalizowane dane w nowym wierszu Arkusza Google."""
     try:
         data_str = data_telegram.strftime('%Y-%m-%d %H:%M:%S')
         
         # ZMIANA: Dodano piątą kolumnę 'link_do_zdjecia'
-        # Jeśli klucza nie ma, .get() bezpiecznie zwróci pusty string ''
         nowy_wiersz = [
             data_str,
             dane_json.get('numer_lokalu_budynku', 'BŁĄD JSON'),
@@ -215,9 +213,6 @@ def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
         return False
 
 # --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE ---
-# ZMIANA: Zwraca teraz (success, message, file_id)
-# --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE ---
-# ZMIANA: Dodano 'tryb_odbioru' i 'target_name' zamiast 'lokal_name'
 def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, tryb_odbioru='lokal'):
     """Wyszukuje podfolder (lokalu lub szeregu) i wysyła do niego zdjęcie."""
     global drive_service, g_drive_main_folder_id, g_drive_szeregi_folder_id, G_DRIVE_MAIN_FOLDER_NAME, G_DRIVE_SZEREGI_FOLDER_NAME
@@ -241,8 +236,8 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         q_str = f"name='{target_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=False"
         
         response = drive_service.files().list(
-            q=q_str, 
-            spaces='drive', 
+            q=q_str,
+            spaces='drive',
             fields='files(id, name)',
         ).execute()
         
@@ -259,7 +254,7 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         file_name = f"{usterka_name} - {podmiot_name}.jpg"
         file_metadata = {
             'name': file_name,
-            'parents': [target_folder_id] 
+            'parents': [target_folder_id]
         }
         
         # Krok 4: Wyślij plik
@@ -317,7 +312,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     message_time = update.message.date
-    chat_data = context.chat_data 
+    chat_data = context.chat_data
 
     try:
         # --- LOGIKA SESJI ODBIORU ---
@@ -325,10 +320,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór
         if user_message.lower().strip() == 'koniec odbioru':
             if chat_data.get('odbiur_aktywny'):
-                lokal = chat_data.get('odbiur_lokal_do_arkusza') # Zamiast 'odbiur_lokal
+                lokal = chat_data.get('odbiur_lokal_do_arkusza')
                 podmiot = chat_data.get('odbiur_podmiot')
                 
-                # ZMIANA: Korzystamy z nowej listy 'odbiur_wpisy'
                 wpisy_lista = chat_data.get('odbiur_wpisy', [])
                 
                 if not wpisy_lista:
@@ -337,10 +331,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla lokalu {lokal}...")
                     licznik_zapisanych = 0
                     
-                    # --- ZMIANA TUTAJ: Pętla dodająca linki do zdjęć ---
+                    # ZMIANA: Pętla dodająca linki do zdjęć
                     for wpis in wpisy_lista:
                         
-                        # Przygotuj podstawowe dane
                         dane_json = {
                             "numer_lokalu_budynku": lokal,
                             "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'),
@@ -348,24 +341,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "link_do_zdjecia": "" # Domyślnie pusty link
                         }
 
-                        # NOWA LOGIKA: Sprawdź, czy wpis był zdjęciem (czy ma file_id)
                         file_id_ze_zdjecia = wpis.get('file_id')
                         if file_id_ze_zdjecia:
-                            # Jeśli tak, stwórz standardowy link do Google Drive
                             link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
                             dane_json['link_do_zdjecia'] = link_zdjecia
                         
-                        # Przekaż kompletny słownik (z linkiem lub bez) do funkcji zapisu
                         if zapisz_w_arkuszu(dane_json, message_time):
                             licznik_zapisanych += 1
-                    # --- KONIEC ZMIANY W PĘTLI ---
                     
+                    # POPRAWKA WCIĘCIA: Ta linia jest na równi z 'if not wpisy_lista:' i 'else:'
                     await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla lokalu {lokal}.")
                 
-                chat_data.clear() 
+                # POPRAWKA WCIĘCIA: Ta linia jest na równi z 'if not wpisy_lista:' i 'else:'
+                chat_data.clear()
             else:
                 await update.message.reply_text("Żaden odbiór nie jest aktywny. Aby zakończyć, musisz najpierw go rozpocząć.")
-            return 
+            return
 
         # --- NOWOŚĆ: SCENARIUSZ 1.5: Użytkownik COFA ostatnią akcję ---
         if user_message.lower().strip() == 'cofnij':
@@ -373,7 +364,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Nie można cofnąć. Żaden odbiór nie jest aktywny.")
                 return
             
-            # ZMIANA: Korzystamy z 'odbiur_wpisy'
             wpisy_lista = chat_data.get('odbiur_wpisy', [])
             if not wpisy_lista:
                 await update.message.reply_text("Nie można cofnąć. Lista usterek jest już pusta.")
@@ -393,14 +383,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if file_id_to_delete:
                         logger.info(f"Cofanie zdjęcia. Usuwanie pliku z Drive: {file_id_to_delete}")
                         
-                        # Wywołujemy synchroniczną funkcję usuwania
                         delete_success, delete_error = delete_file_from_drive(file_id_to_delete)
                         
                         if delete_success:
                             await update.message.reply_text(f"↩️ Cofnięto i usunięto zdjęcie:\n'{opis_usunietego}'\n"
                                                             f"(Pozostało: {len(wpisy_lista)}).")
                         else:
-                            # Błąd krytyczny - wpis cofnięty, ale plik został na Drive
                             await update.message.reply_text(f"↩️ Cofnięto wpis: '{opis_usunietego}'.\n"
                                                             f"⚠️ BŁĄD: Nie udało się usunąć pliku z Google Drive: {delete_error}\n"
                                                             f"Plik 'zombie' mógł pozostać na Dysku!\n"
@@ -419,10 +407,105 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Błąd podczas operacji 'cofnij': {e}")
                 await update.message.reply_text(f"❌ Wystąpił błąd podczas cofania: {e}")
             
-            return # Zakończ new(f"✅ Zgłoszenie (pojedyncze) przyjęte i zapisane:\n\n"
-                                                      f"Lokal: {dane.get('numer_lokalu_budynku')}\n"
-                                                      f"Usterka: {dane.get('rodzaj_usterki')}\n"
-                                                      f"Podmiot: {dane.get('podmiot_odpowiedzialny')}")
+            return # Zakończ obsługę tej wiadomości
+
+        # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór
+        if user_message.lower().startswith('rozpoczęcie odbioru'):
+            logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini po dane sesji...")
+            await update.message.reply_text("Rozpoczynam odbiór... 🧠 Analizuję dane celu i firmy...")
+            
+            response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
+            cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+            dane_startowe = json.loads(cleaned_text)
+            
+            lokal_raw = dane_startowe.get('numer_lokalu_budynku')
+            podmiot = dane_startowe.get('podmiot_odpowiedzialny')
+
+            if lokal_raw == "BRAK DANYCH" or podmiot == "BRAK DANYCH":
+                await update.message.reply_text("❌ Nie udało się rozpoznać celu (lokalu/szeregu) lub firmy.\n"
+                                                "Spróbuj ponownie, np: \n"
+                                                "'Rozpoczęcie odbioru, lokal 46/2, firma X'\n"
+                                                "'Rozpoczęcie odbioru, SZEREG 5, firma Y'")
+            else:
+                target_name = ""
+                tryb_odbioru = ""
+                
+                # NOWA LOGIKA: Sprawdź czy to lokal czy szereg
+                if "szereg" in lokal_raw.lower():
+                    tryb_odbioru = "szereg"
+                    target_name = lokal_raw.upper().strip() # np. "SZEREG 5"
+                else:
+                    tryb_odbioru = "lokal"
+                    target_name = lokal_raw.lower().replace("lokal", "").strip().replace("/", ".") # np. "46.2"
+                
+                chat_data['odbiur_aktywny'] = True
+                chat_data['odbiur_lokal_do_arkusza'] = target_name # Tego użyjemy do zapisu w Arkuszu
+                chat_data['odbiur_target_nazwa'] = target_name    # Tego użyjemy do wysyłania na Drive
+                chat_data['tryb_odbioru'] = tryb_odbioru           # Tego użyjemy do wysyłania na Drive
+                chat_data['odbiur_podmiot'] = podmiot
+                
+                chat_data['odbiur_wpisy'] = []
+                
+                await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
+                                                f"Cel: {target_name}\n"
+                                                f"Firma: {podmiot}\n\n"
+                                                f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
+                                                f"Wpisz 'cofnij', aby usunąć ostatni wpis.\n"
+                                                f"Zakończ pisząc 'Koniec odbioru'.")
+            
+            return
+
+        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
+        if chat_data.get('odbiur_aktywny'):
+            logger.info(f"Odbiór aktywny. Wysyłanie usterki '{user_message}' do Gemini w celu ekstrakcji...")
+            
+            response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
+            cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+            dane_usterki = json.loads(cleaned_text)
+            
+            usterka_opis = dane_usterki.get('rodzaj_usterki', user_message)
+            if usterka_opis == "BRAK DANYCH":
+                usterka_opis = user_message
+                
+            nowy_wpis = {
+                'typ': 'tekst',
+                'opis': usterka_opis
+            }
+            chat_data['odbiur_wpisy'].append(nowy_wpis)
+            
+            await update.message.reply_text(f"➕ Dodano (tekst): '{usterka_opis}'\n"
+                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}). Wpisz kolejną, 'cofnij' lub 'Koniec odbioru'.")
+            return
+
+    except json.JSONDecodeError as json_err:
+        logger.error(f"Błąd parsowania JSON od Gemini (w logice sesji): {json_err}. Odpowiedź AI: {response.text}")
+        await update.message.reply_text("❌ Błąd analizy AI. Spróbuj sformułować wiadomość inaczej.")
+        return
+    except Exception as session_err:
+        logger.error(f"Wystąpił nieoczekiwany błąd w logice sesji: {session_err}")
+        await update.message.reply_text(f"❌ Wystąpił krytyczny błąd: {session_err}")
+        return
+
+    # --- LOGIKA DOMYŚLNA (FALLBACK) ---
+    
+    logger.info(f"Brak aktywnego odbioru. Przetwarzanie jako pojedyncze zgłoszenie: '{user_message}'")
+    
+    try:
+        await update.message.reply_text("Przetwarzam jako pojedyncze zgłoszenie... 🧠")
+        
+        logger.info("Wysyłanie do Gemini...")
+        response = model.generate_content([PROMPT_SYSTEMOWY, user_message])
+        
+        cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        dane = json.loads(cleaned_text)
+        logger.info(f"Gemini zwróciło JSON: {dane}")
+
+        if zapisz_w_arkuszu(dane, message_time):
+            # POPRAWKA WCIĘCIA: Te linie f"..." są na tym samym poziomie co 'await'
+            await update.message.reply_text(f"✅ Zgłoszenie (pojedyncze) przyjęte i zapisane:\n\n"
+                                            f"Lokal: {dane.get('numer_lokalu_budynku')}\n"
+                                            f"Usterka: {dane.get('rodzaj_usterki')}\n"
+                                            f"Podmiot: {dane.get('podmiot_odpowiedzialny')}")
         else:
             await update.message.reply_text("❌ Błąd zapisu do bazy danych (Arkusza). Skontaktuj się z adminem.")
 
@@ -461,12 +544,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_bytes_io = io.BytesIO()
         await photo_file.download_to_memory(file_bytes_io)
         
-        # ZMIANA: Przekazujemy nowe zmienne do funkcji wysyłania
         success, message, file_id = upload_photo_to_drive(
-            file_bytes_io, 
-            target_name, 
-            usterka, 
-            podmiot, 
+            file_bytes_io,
+            target_name,
+            usterka,
+            podmiot,
             tryb_odbioru=tryb
         )
         
