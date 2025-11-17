@@ -399,24 +399,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             return
 
-       # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
-        if chat_data.get('odbiur_aktywny'):
-            logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej: '{user_message}'")
-            
-            # ZMIANA: Wyłączamy analizę AI w trakcie sesji.
-            # Bierzemy wiadomość użytkownika w całości jako opis usterki.
-            usterka_opis = user_message.strip()
-            
-            # --- USUNIĘTA SEKCJA AI ---
-            # response = model.generate_content(user_message) 
-            # cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-            # dane_usterki = json.loads(cleaned_text)
-            # usterka_opis = dane_usterki.get('rodzaj_usterki', user_message)
-            # if usterka_opis == "BRAK DANYCH":
-            #     usterka_opis = user_message
-            # --- KONIEC USUNIĘTEJ SEKCJI ---
-            
-            usterka_id = str(uuid.uuid4())
+        # --- POCZĄTEK ZMIANY (NAPRAWA SCENARIUSZA 3) ---
+        
+        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
+        if chat_data.get('odbiur_aktywny'):
+            logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej: '{user_message}'")
+            
+            # ZMIANA: Wyłączamy analizę AI w trakcie sesji.
+            # Bierzemy wiadomość użytkownika w całości jako opis usterki.
+            usterka_opis = user_message.strip()
+            
+            # --- USUNIĘTA SEKCJA AI ---
+            # response = model.generate_content(user_message) 
+            # cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+            # dane_usterki = json.loads(cleaned_text)
+            # usterka_opis = dane_usterki.get('rodzaj_usterki', user_message)
+            # if usterka_opis == "BRAK DANYCH":
+            #     usterka_opis = user_message
+            # --- KONIEC USUNIĘTEJ SEKCJI ---
+            
+            usterka_id = str(uuid.uuid4())
             nowy_wpis = {
                 'id': usterka_id,
                 'typ': 'tekst',
@@ -430,6 +432,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             reply_markup=get_inline_keyboard(usterka_id=usterka_id),
                                             parse_mode='HTML')
             return
+            
+        # --- KONIEC ZMIANY ---
 
     except json.JSONDecodeError as json_err:
         logger.error(f"Błąd parsowania JSON od Gemini (w logice sesji): {json_err}. Odpowiedź AI: {response.text}")
@@ -490,7 +494,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tryb = chat_data.get('tryb_odbioru')
     
     await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{usterka}'. Przetwarzam i wysyłam na Drive...",
-                                    reply_markup=get_inline_keyboard(usterka_id=None))
+                                      reply_markup=get_inline_keyboard(usterka_id=None))
 
     try:
         photo_file = await update.message.photo[-1].get_file()
@@ -614,7 +618,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         if not wpisy_lista:
             await query.message.reply_text(f"Zakończono odbiór dla lokalu {lokal}. Nie dodano żadnych usterek.",
-                                            reply_markup=ReplyKeyboardRemove())
+                                           reply_markup=ReplyKeyboardRemove())
         else:
             logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla lokalu {lokal}...")
             licznik_zapisanych = 0
@@ -635,7 +639,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     licznik_zapisanych += 1
             
             await query.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla lokalu {lokal}.",
-                                            reply_markup=ReplyKeyboardRemove())
+                                           reply_markup=ReplyKeyboardRemove())
         
         chat_data.clear()
         
@@ -680,4 +684,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
