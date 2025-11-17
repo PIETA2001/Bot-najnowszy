@@ -16,7 +16,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler, CommandHandler
 
 # --- 1. Konfiguracja Logowania ---
 logging.basicConfig(
@@ -42,6 +42,21 @@ GOOGLE_SHEET_NAME = 'Odbiory_Kolonia_Warszawska'
 WORKSHEET_NAME = 'Arkusz1'
 G_DRIVE_MAIN_FOLDER_NAME = 'Lokale'
 G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi'
+
+# --- 3b. Dane do Przycisków ---
+DANE_SZEREGOW = {
+    "Szereg 1": ["49/1", "49/2", "50/1", "50/2", "51/1", "51/2", "52/1", "52/2", "53/1", "53/2", "54/1", "54/2"],
+    "Szereg 2": ["38/1", "38/2", "39/1", "39/2", "40/1", "40/2", "41/1", "41/2", "42/1", "42/2", "43/1", "43/2"],
+    "Szereg 3": ["55/1", "55/2", "56/1", "56/2", "57/1", "57/2", "58/1", "58/2", "59/1", "59/2", "60/1", "60/2", "61/1", "61/2", "62/1", "62/2"],
+    "Szereg 4": ["44/1", "44/2", "45/1", "45/2", "46/1", "46/2", "47/1", "47/2", "48/1", "48/2"],
+    "Szereg 5": ["63/1", "63/2", "64/1", "64/2", "65/1", "65/2", "66/1", "66/2", "67/1", "67/2", "68/1", "68/2", "69/1", "69/2", "70/1", "70/2", "71/1", "71/2", "72/1", "72/2", "73/1", "73/2", "74/1", "74/2", "75/1", "75/2", "76/1", "76/2", "77/1", "77/2"],
+    "Szereg 6": ["1/1", "1/2", "2/1", "2/2", "3/1", "3/2", "4/1", "4/2", "5/1", "5/2", "6/1", "6/2", "7/1", "7/2"],
+    "Szereg 7": ["8/1", "8/2", "9/1", "9/2", "10/1", "10/2", "11/1", "11/2", "12/1", "12/2", "13/1", "13/2", "14/1", "14/2"],
+    "Szereg 8": ["32/1", "32/2", "33/1", "33/2", "34/1", "34/2", "35/1", "35/2", "36/1", "36/2", "37/1", "37/2"],
+    "Szereg 9": ["27/1", "27/2", "28/1", "28/2", "29/1", "29/2", "30/1", "30/2", "31/1", "31/2"],
+    "Szereg 10": ["20/1", "20/2", "21/1", "21/2", "22/1", "22/2", "23/1", "23/2", "24/1", "24/2", "25/1", "25/2", "26/1", "26/2"],
+    "Szereg 11": ["15/1", "15/2", "16/1", "16/2", "17/1", "17/2", "18/1", "18/2", "19/1", "19/2"]
+}
 
 gc = None
 worksheet = None
@@ -291,6 +306,64 @@ def delete_file_from_drive(file_id):
         return False, str(e)
 
 
+# --- 6b. Funkcje do budowania klawiatur dynamicznych ---
+
+def build_szereg_keyboard():
+    """Tworzy klawiaturę wyboru Szeregu."""
+    keyboard = []
+    row = []
+    # Sortujemy klucze, aby "Szereg 1" był przed "Szereg 10"
+    sorted_keys = sorted(DANE_SZEREGOW.keys(), key=lambda x: int(x.split(' ')[1]))
+    
+    for szereg_name in sorted_keys:
+        row.append(InlineKeyboardButton(szereg_name, callback_data=f"szereg_{szereg_name}"))
+        if len(row) >= 2: # 2 przyciski w rzędzie
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    return InlineKeyboardMarkup(keyboard)
+
+def build_lokal_keyboard(szereg_name):
+    """Tworzy klawiaturę wyboru Lokalu dla danego Szeregu."""
+    lokale = DANE_SZEREGOW.get(szereg_name, [])
+    if not lokale:
+        return None 
+    
+    keyboard = []
+    row = []
+    for lokal_name in lokale:
+        row.append(InlineKeyboardButton(lokal_name, callback_data=f"lokal_{lokal_name}"))
+        if len(row) >= 4: # 4 lokale w rzędzie
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    
+    # Dodajemy przycisk "Wstecz"
+    keyboard.append([InlineKeyboardButton("<< Wróć do Szeregów", callback_data="start_flow")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+# --- Handler komendy /start ---
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Obsługuje komendę /start, rozpoczynając flow wyboru."""
+    chat_data = context.chat_data
+    
+    if chat_data.get('odbiur_aktywny'):
+        await update.message.reply_text(
+            "Odbiór jest już w toku. Zakończ go, aby rozpocząć nowy.",
+            reply_markup=get_inline_keyboard(usterka_id=None)
+        )
+    else:
+        chat_data.clear() # Czyścimy stan na wypadek problemów
+        keyboard = build_szereg_keyboard()
+        await update.message.reply_text(
+            "Rozpocznij nowy odbiór. Najpierw wybierz Szereg:",
+            reply_markup=keyboard
+        )
+
+
 # --- 7. Główny Handler (serce bota) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Przechwytuje wiadomość, sprawdza stan sesji i decyduje co robić."""
@@ -300,6 +373,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
          return
 
     user_message = update.message.text
+    chat_data = context.chat_data
+
+    # --- NOWY BLOK: Obsługa stanu AWAITING_FIRMA ---
+    if chat_data.get('state') == 'AWAITING_FIRMA':
+        if not user_message:
+             await update.message.reply_text("Oczekuję na nazwę firmy...")
+             return
+        
+        firma = user_message.strip()
+        lokal_name = chat_data.get('wybrany_lokal', 'BŁĄD STANU')
+        message_time = update.message.date # Musimy to tu też zdefiniować
+
+        if lokal_name == 'BŁĄD STANU':
+            await update.message.reply_text("Wystąpił błąd stanu. Spróbuj ponownie od /start")
+            chat_data.clear()
+            return
+
+        # Ustawiamy stan tak, jakby to zrobił 'Rozpoczęcie odbioru...'
+        target_name = lokal_name.lower().replace("/", ".")
+        
+        chat_data['odbiur_aktywny'] = True
+        chat_data['odbiur_lokal_do_arkusza'] = lokal_name # np. "70/1"
+        chat_data['odbiur_target_nazwa'] = target_name # np. "70.1"
+        chat_data['tryb_odbioru'] = "lokal" # Zakładamy, że to zawsze lokal (z folderu "Lokale")
+        chat_data['odbiur_podmiot'] = firma
+        chat_data['odbiur_wpisy'] = []
+        chat_data['state'] = None # Wyczyść stan AWAITING_FIRMA
+        
+        await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
+                                        f"Cel: <b>{lokal_name}</b>\n"
+                                        f"Firma: <b>{firma}</b>\n\n"
+                                        f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n"
+                                        f"Użyj przycisków poniżej, aby cofnąć lub zakończyć.\n",
+                                        reply_markup=get_inline_keyboard(usterka_id=None),
+                                        parse_mode='HTML')
+        return
+    # --- KONIEC NOWEGO BLOKU ---
+
     if not user_message:
         if update.message.caption:
             logger.info("Wiadomość tekstowa jest pusta, ale jest caption. Przekazuję do handle_photo.")
@@ -309,7 +420,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     message_time = update.message.date
-    chat_data = context.chat_data
 
     try:
         # --- LOGIKA SESJI ODBIORU ---
@@ -352,7 +462,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 reply_markup=ReplyKeyboardRemove())
             return
 
-        # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór
+        # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór (manualny)
         if user_message.lower().startswith('rozpoczęcie odbioru'):
             logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini...")
             await update.message.reply_text("Rozpoczynam odbiór... 🧠 Analizuję dane celu i firmy...")
@@ -388,7 +498,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_data['odbiur_podmiot'] = podmiot
                 chat_data['odbiur_wpisy'] = []
                 
-                # ZMIANA: Dodano parse_mode='HTML'
                 await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
                                                 f"Cel: <b>{target_name}</b>\n"
                                                 f"Firma: <b>{podmiot}</b>\n\n"
@@ -399,24 +508,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             return
 
-        # --- POCZĄTEK ZMIANY (NAPRAWA SCENARIUSZA 3) ---
-        
-        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
+        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA (POPRAWIONY)
         if chat_data.get('odbiur_aktywny'):
             logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej: '{user_message}'")
             
             # ZMIANA: Wyłączamy analizę AI w trakcie sesji.
-            # Bierzemy wiadomość użytkownika w całości jako opis usterki.
             usterka_opis = user_message.strip()
-            
-            # --- USUNIĘTA SEKCJA AI ---
-            # response = model.generate_content(user_message) 
-            # cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-            # dane_usterki = json.loads(cleaned_text)
-            # usterka_opis = dane_usterki.get('rodzaj_usterki', user_message)
-            # if usterka_opis == "BRAK DANYCH":
-            #     usterka_opis = user_message
-            # --- KONIEC USUNIĘTEJ SEKCJI ---
             
             usterka_id = str(uuid.uuid4())
             nowy_wpis = {
@@ -426,16 +523,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            # ZMIANA: Dodano parse_mode='HTML'
             await update.message.reply_text(f"➕ Dodano (tekst): <b>{usterka_opis}</b>\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
                                             reply_markup=get_inline_keyboard(usterka_id=usterka_id),
                                             parse_mode='HTML')
             return
-            
-        # --- KONIEC ZMIANY ---
 
     except json.JSONDecodeError as json_err:
+        # Ten błąd może się teraz zdarzyć tylko w SCENARIUSZU 2
         logger.error(f"Błąd parsowania JSON od Gemini (w logice sesji): {json_err}. Odpowiedź AI: {response.text}")
         await update.message.reply_text("❌ Błąd analizy AI. Spróbuj sformułować wiadomość inaczej.")
         return
@@ -455,7 +550,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Gemini zwróciło JSON: {dane}")
 
         if zapisz_w_arkuszu(dane, message_time):
-            # ZMIANA: Dodano parse_mode='HTML'
             await update.message.reply_text(f"✅ Zgłoszenie (pojedyncze) przyjęte i zapisane:\n\n"
                                             f"Lokal: <b>{dane.get('numer_lokalu_budynku')}</b>\n"
                                             f"Usterka: <b>{dane.get('rodzaj_usterki')}</b>\n"
@@ -517,7 +611,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            # ZMIANA: Dodano parse_mode='HTML'
             await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: <b>{message}</b>\n"
                                             f"➕ Usterka dodana do listy: <b>{opis_zdjecia}</b>\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
@@ -537,21 +630,73 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obsługuje naciśnięcia przycisków inline."""
     query = update.callback_query
-    await query.answer()
+    await query.answer() # Zawsze odpowiadamy najpierw
     
     chat_data = context.chat_data
+    data = query.data
+
+    # --- Logika dla 'start_flow' (przycisk "Wstecz" lub /start) ---
+    if data == 'start_flow':
+        if chat_data.get('odbiur_aktywny'):
+            await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
+            return
+        
+        chat_data.clear()
+        keyboard = build_szereg_keyboard()
+        await query.edit_message_text(
+            "Rozpocznij nowy odbiór. Najpierw wybierz Szereg:",
+            reply_markup=keyboard
+        )
+        return
+
+    # --- Logika dla 'szereg_' ---
+    elif data.startswith('szereg_'):
+        if chat_data.get('odbiur_aktywny'):
+            await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
+            return
+        
+        szereg_name = data.split('_', 1)[1]
+        chat_data['wybrany_szereg'] = szereg_name
+        
+        keyboard = build_lokal_keyboard(szereg_name)
+        await query.edit_message_text(
+            f"Wybrano: <b>{szereg_name}</b>.\nTeraz wybierz Lokal:",
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+        return
+
+    # --- Logika dla 'lokal_' ---
+    elif data.startswith('lokal_'):
+        if chat_data.get('odbiur_aktywny'):
+            await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
+            return
+            
+        lokal_name = data.split('_', 1)[1]
+        szereg_name = chat_data.get('wybrany_szereg', 'Brak') # Pobieramy z pamięci
+        
+        chat_data['wybrany_lokal'] = lokal_name
+        chat_data['state'] = 'AWAITING_FIRMA' # Ustaw stan oczekiwania na tekst
+        
+        await query.edit_message_text(
+            f"Wybrano:\nSzereg: <b>{szereg_name}</b>\nLokal: <b>{lokal_name}</b>\n\n"
+            f"Proszę, <b>podaj teraz nazwę firmy</b> wykonawczej:",
+            parse_mode='HTML',
+            reply_markup=None # Usuwamy przyciski
+        )
+        return
     
     # --- Logika dla 'cofnij' z ID ---
-    if query.data.startswith('cofnij_'):
+    if data.startswith('cofnij_'):
         logger.info("Otrzymano callback 'cofnij' z ID")
         if not chat_data.get('odbiur_aktywny'):
             await query.message.reply_text("Sesja już się zakończyła.", reply_markup=ReplyKeyboardRemove())
             return
 
         try:
-            id_to_delete = query.data.split('_', 1)[1]
+            id_to_delete = data.split('_', 1)[1]
         except Exception as e:
-            logger.error(f"Nie można sparsować ID z callback: {query.data} - {e}")
+            logger.error(f"Nie można sparsować ID z callback: {data} - {e}")
             await query.answer("Błąd: Nieprawidłowy format ID.", show_alert=True)
             return
 
@@ -577,7 +722,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             wpisy_lista.remove(wpis_to_delete)
             chat_data['odbiur_wpisy'] = wpisy_lista
             
-            # ZMIANA: Dodano <b> tagi
             delete_feedback = f"↩️ Usunięto: <b>{opis_usunietego}</b>"
 
             if wpis_to_delete.get('typ') == 'zdjecie':
@@ -590,12 +734,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                         delete_feedback += f"\n(BŁĄD usuwania z Drive: {delete_error})."
             
             try:
-                # ZMIANA: Dodano parse_mode='HTML'
                 await query.edit_message_text(f"--- USUNIĘTO: <b>{opis_usunietego}</b> ---", reply_markup=None, parse_mode='HTML')
             except Exception:
                 pass
 
-            # ZMIANA: Dodano parse_mode='HTML'
             await query.message.reply_text(f"{delete_feedback}\n(Pozostało: {len(wpisy_lista)}).", 
                                            reply_markup=get_inline_keyboard(usterka_id=None),
                                            parse_mode='HTML')
@@ -605,7 +747,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer(f"Błąd: {e}", show_alert=True)
 
     # --- Logika dla 'koniec_odbioru' ---
-    elif query.data == 'koniec_odbioru':
+    elif data == 'koniec_odbioru':
         logger.info("Otrzymano callback 'koniec_odbioru'")
         if not chat_data.get('odbiur_aktywny'):
             await query.message.reply_text("Żaden odbiór nie jest aktywny.", reply_markup=ReplyKeyboardRemove())
@@ -669,6 +811,10 @@ def main():
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # Dodajemy handler dla /start
+    application.add_handler(CommandHandler("start", start_command))
+
+    # Reszta handlerów
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(handle_callback_query))
