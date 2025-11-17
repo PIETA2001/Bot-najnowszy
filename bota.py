@@ -15,7 +15,8 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+# ZMIANA: Dodano ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove, ReplyKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackQueryHandler, CommandHandler
 
 # --- 1. Konfiguracja Logowania ---
@@ -43,7 +44,7 @@ WORKSHEET_NAME = 'Arkusz1'
 G_DRIVE_MAIN_FOLDER_NAME = 'Lokale'
 G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi'
 
-# --- 3b. Dane do Przycisków (ZMIENIONA STRUKTURA) ---
+# --- 3b. Dane do Przycisków ---
 DANE_SZEREGOW = {
     "Szereg 1": {"zakres": "49-54", "lokale": ["49/1", "49/2", "50/1", "50/2", "51/1", "51/2", "52/1", "52/2", "53/1", "53/2", "54/1", "54/2"]},
     "Szereg 2": {"zakres": "38-43", "lokale": ["38/1", "38/2", "39/1", "39/2", "40/1", "40/2", "41/1", "41/2", "42/1", "42/2", "43/1", "43/2"]},
@@ -57,6 +58,11 @@ DANE_SZEREGOW = {
     "Szereg 10": {"zakres": "20-26", "lokale": ["20/1", "20/2", "21/1", "21/2", "22/1", "22/2", "23/1", "23/2", "24/1", "24/2", "25/1", "25/2", "26/1", "26/2"]},
     "Szereg 11": {"zakres": "15-19", "lokale": ["15/1", "15/2", "16/1", "16/2", "17/1", "17/2", "18/1", "18/2", "19/1", "19/2"]}
 }
+
+# NOWA Klawiatura "NOWY ODBIÓR"
+START_KEYBOARD = ReplyKeyboardMarkup(
+    [["NOWY ODBIÓR"]], resize_keyboard=True
+)
 
 gc = None
 worksheet = None
@@ -182,7 +188,7 @@ Ustalenia:
 )
 
 
-# --- Funkcja tworząca klawiaturę Inline (PRZEBUDOWANA) ---
+# --- Funkcja tworząca klawiaturę Inline ---
 def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = None):
     """Tworzy i zwraca dynamiczną klawiaturę inline na podstawie stanu sesji."""
     keyboard = []
@@ -190,7 +196,7 @@ def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = No
     if context:
         chat_data = context.chat_data
         
-        # NOWA LOGIKA: Dodaj przyciski lokali, jeśli jesteśmy w trybie "Całe szeregi"
+        # Logika: Dodaj przyciski lokali, jeśli jesteśmy w trybie "Całe szeregi"
         lista_lokali = chat_data.get('lista_lokali_szeregu')
         if lista_lokali:
             row = []
@@ -205,13 +211,13 @@ def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = No
             # Dodajemy separator
             keyboard.append([InlineKeyboardButton("--- Wybierz lokal powyżej ---", callback_data="noop")])
 
-    # Logika dla przycisku "Cofnij" (bez zmian)
+    # Logika dla przycisku "Cofnij"
     if usterka_id:
         keyboard.append([
             InlineKeyboardButton(f"Cofnij TĘ usterkę ↩️", callback_data=f'cofnij_{usterka_id}')
         ])
     
-    # Logika dla przycisku "Zakończ" (bez zmian)
+    # Logika dla przycisku "Zakończ"
     keyboard.append([
         InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='koniec_odbioru')
     ])
@@ -249,6 +255,7 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         parent_folder_id = None
         parent_folder_name = ""
         
+        # ZMIANA: tryb 'szereg' teraz też wysyła do folderu "Szeregi"
         if tryb_odbioru == 'lokal':
             parent_folder_id = g_drive_main_folder_id
             parent_folder_name = G_DRIVE_MAIN_FOLDER_NAME
@@ -285,6 +292,7 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         else:
             target_folder_id = target_folder[0].get('id')
         
+        # ZMIANA: Nazwa pliku zawiera teraz pełny opis (np. "70/1 - Rysa")
         file_name = f"{usterka_name} - {podmiot_name}.jpg"
         file_metadata = {
             'name': file_name,
@@ -332,30 +340,27 @@ def build_szereg_keyboard():
     """Tworzy klawiaturę wyboru Szeregu (z ZAKRESEM)."""
     keyboard = []
     row = []
-    # Sortujemy klucze, aby "Szereg 1" był przed "Szereg 10"
     sorted_keys = sorted(DANE_SZEREGOW.keys(), key=lambda x: int(x.split(' ')[1]))
     
     for szereg_name in sorted_keys:
-        # NOWA ZMIANA: Pobieramy dane z nowej struktury
         dane = DANE_SZEREGOW[szereg_name]
         zakres = dane['zakres']
-        # Tworzymy nowy napis na przycisku
         button_text = f"{szereg_name} ({zakres})"
         
         row.append(InlineKeyboardButton(button_text, callback_data=f"szereg_{szereg_name}"))
-        if len(row) >= 2: # 2 przyciski w rzędzie
+        if len(row) >= 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
     
-    # Przycisk "Anuluj" lub "Wróć" do menu głównego
+    # ZMIANA: Przycisk "Anuluj" wraca do menu głównego
     keyboard.append([InlineKeyboardButton("<< Anuluj", callback_data="start_menu")])
     return InlineKeyboardMarkup(keyboard)
 
+# Ta funkcja nie jest już wywoływana, ale zostawiamy na wszelki wypadek
 def build_lokal_keyboard(szereg_name):
     """Tworzy klawiaturę wyboru Lokalu dla danego Szeregu."""
-    # NOWA ZMIANA: Pobieramy "lokale" z nowej struktury
     lokale = DANE_SZEREGOW.get(szereg_name, {}).get("lokale", [])
     if not lokale:
         return None 
@@ -364,39 +369,31 @@ def build_lokal_keyboard(szereg_name):
     row = []
     for lokal_name in lokale:
         row.append(InlineKeyboardButton(lokal_name, callback_data=f"lokal_{lokal_name}"))
-        if len(row) >= 4: # 4 lokale w rzędzie
+        if len(row) >= 4:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
     
-    # ZMIANA: Przycisk "Wstecz" wraca do listy szeregów dla trybu pojedynczego
-    keyboard.append([InlineKeyboardButton("<< Wróć do Szeregów", callback_data="start_flow_pojedyncze")])
+    keyboard.append([InlineKeyboardButton("<< Wróć do Szeregów", callback_data="start_flow_szeregi")]) # Zmieniono na logikę szeregów
     return InlineKeyboardMarkup(keyboard)
 
 
 # --- Handler komendy /start (ZMIENIONY) ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Obsługuje komendę /start, pokazując nowe menu wyboru trybu."""
+    """Obsługuje komendę /start, pokazując klawiaturę główną."""
     chat_data = context.chat_data
     
     if chat_data.get('odbiur_aktywny'):
         await update.message.reply_text(
             "Odbiór jest już w toku. Zakończ go, aby rozpocząć nowy.",
-            # Musimy przekazać context do get_inline_keyboard
             reply_markup=get_inline_keyboard(usterka_id=None, context=context)
         )
     else:
-        chat_data.clear() # Czyścimy stan na wypadek problemów
-        
-        # NOWE MENU: Wybór trybu
-        keyboard = [
-            [InlineKeyboardButton("Pojedyncze lokale", callback_data="start_flow_pojedyncze")],
-            [InlineKeyboardButton("Całe szeregi", callback_data="start_flow_szeregi")]
-        ]
+        chat_data.clear() 
         await update.message.reply_text(
-            "Wybierz tryb pracy:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "Witaj! Bot jest gotowy.\nUżyj przycisku 'NOWY ODBIÓR' na klawiaturze, aby rozpocząć.",
+            reply_markup=START_KEYBOARD
         )
 
 
@@ -411,40 +408,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     chat_data = context.chat_data
 
-    # --- NOWY BLOK: Obsługa stanu AWAITING_FIRMA (dla pojedynczego lokalu) ---
-    if chat_data.get('state') == 'AWAITING_FIRMA':
-        if not user_message:
-             await update.message.reply_text("Oczekuję na nazwę firmy...")
-             return
-        
-        firma = user_message.strip()
-        lokal_name = chat_data.get('wybrany_lokal', 'BŁĄD STANU')
-        message_time = update.message.date 
-
-        if lokal_name == 'BŁĄD STANU':
-            await update.message.reply_text("Wystąpił błąd stanu. Spróbuj ponownie od /start")
+    # --- SCENARIUSZ 0: Użytkownik klika "NOWY ODBIÓR" ---
+    if user_message == "NOWY ODBIÓR":
+        if chat_data.get('odbiur_aktywny'):
+            await update.message.reply_text(
+                "Odbiór jest już w toku. Zakończ go, aby rozpocząć nowy.",
+                reply_markup=get_inline_keyboard(usterka_id=None, context=context)
+            )
+        else:
             chat_data.clear()
-            return
+            keyboard = build_szereg_keyboard()
+            await update.message.reply_text(
+                "Tryb: Nowy Odbiór.\nWybierz, który szereg chcesz odbierać:",
+                reply_markup=keyboard
+            )
+        return # Zatrzymaj dalsze przetwarzanie
 
-        target_name = lokal_name.lower().replace("/", ".")
-        
-        chat_data['odbiur_aktywny'] = True
-        chat_data['odbiur_lokal_do_arkusza'] = lokal_name # np. "70/1"
-        chat_data['odbiur_target_nazwa'] = target_name # np. "70.1"
-        chat_data['tryb_odbioru'] = "lokal" 
-        chat_data['odbiur_podmiot'] = firma
-        chat_data['odbiur_wpisy'] = []
-        chat_data['state'] = None 
-        
-        await update.message.reply_text(f"✅ Rozpoczęto odbiór dla:\n\n"
-                                        f"Cel: <b>{lokal_name}</b>\n"
-                                        f"Firma: <b>{firma}</b>\n\n"
-                                        f"Teraz wpisuj usterki (tekst lub zdjęcia z opisem).\n",
-                                        reply_markup=get_inline_keyboard(usterka_id=None, context=context),
-                                        parse_mode='HTML')
-        return
-    
-    # --- NOWY BLOK: Obsługa stanu AWAITING_FIRMA_SZEREG (dla całego szeregu) ---
+    # --- STAN: Oczekiwanie na firmę (po wybraniu szeregu) ---
     if chat_data.get('state') == 'AWAITING_FIRMA_SZEREG':
         if not user_message:
              await update.message.reply_text("Oczekuję na nazwę firmy...")
@@ -452,30 +432,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         firma = user_message.strip()
         szereg_name = chat_data.get('wybrany_szereg', 'BŁĄD STANU')
-        message_time = update.message.date
-
+        
         if szereg_name == 'BŁĄD STANU':
-            await update.message.reply_text("Wystąpił błąd stanu. Spróbuj ponownie od /start")
+            await update.message.reply_text("Wystąpił błąd stanu. Spróbuj ponownie od /start", reply_markup=START_KEYBOARD)
             chat_data.clear()
             return
         
         target_name = szereg_name.upper().strip()
         
         chat_data['odbiur_aktywny'] = True
-        chat_data['odbiur_lokal_do_arkusza'] = target_name # Np. "SZEREG 5"
-        chat_data['odbiur_target_nazwa'] = target_name 
-        chat_data['tryb_odbioru'] = "szereg" # Ważne dla Google Drive
+        # ZMIANA: Zapisujemy nazwę szeregu jako 'identyfikator odbioru', ale nie do kolumny 'lokal'
+        chat_data['odbiur_identyfikator'] = target_name 
+        chat_data['odbiur_target_nazwa'] = target_name # Dla folderu na Drive
+        chat_data['tryb_odbioru'] = "szereg" 
         chat_data['odbiur_podmiot'] = firma
         chat_data['odbiur_wpisy'] = []
         chat_data['state'] = None
         
-        # NAJWAŻNIEJSZE: Zapisujemy listę lokali do pokazywania na klawiaturze
         chat_data['lista_lokali_szeregu'] = DANE_SZEREGOW[szereg_name].get("lokale", [])
-        chat_data['biezacy_lokal_w_szeregu'] = None # Na początku żaden nie jest wybrany
+        chat_data['biezacy_lokal_w_szeregu'] = None 
 
+        # ZMIANA: Wysyłamy ReplyKeyboardRemove(), aby ukryć "NOWY ODBIÓR"
+        await update.message.reply_text("Rozpoczynam odbiór...", reply_markup=ReplyKeyboardRemove())
+        
+        # A następnie wysyłamy klawiaturę Inline
         await update.message.reply_text(f"✅ Rozpoczęto odbiór dla: <b>CAŁY {target_name}</b>\n"
                                         f"Firma: <b>{firma}</b>\n\n"
-                                        f"Teraz wybierz lokal z przycisków poniżej i wpisuj usterki.\n",
+                                        f"Teraz wybierz lokal z przycisków poniżej i wpisuj usterki.\n"
+                                        f"(Jeśli nie wybierzesz lokalu, usterka zapisze się na cały szereg).",
                                         reply_markup=get_inline_keyboard(usterka_id=None, context=context),
                                         parse_mode='HTML')
         return
@@ -497,21 +481,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór (Fallback tekstowy)
         if user_message.lower().strip() == 'koniec odbioru':
             if chat_data.get('odbiur_aktywny'):
-                lokal = chat_data.get('odbiur_lokal_do_arkusza')
+                # ZMIANA: `identyfikator_odbioru` to teraz nazwa szeregu (np. "SZEREG 5")
+                identyfikator_odbioru = chat_data.get('odbiur_identyfikator', 'Brak ID Odbioru')
                 podmiot = chat_data.get('odbiur_podmiot')
                 wpisy_lista = chat_data.get('odbiur_wpisy', [])
                 
                 if not wpisy_lista:
-                    await update.message.reply_text(f"Zakończono odbiór dla {lokal}. Nie dodano żadnych usterek.",
-                                                    reply_markup=ReplyKeyboardRemove())
+                    await update.message.reply_text(f"Zakończono odbiór dla {identyfikator_odbioru}. Nie dodano żadnych usterek.",
+                                                    reply_markup=START_KEYBOARD) # Pokaż klawiaturę startową
                 else:
-                    logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla {lokal}...")
+                    logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla {identyfikator_odbioru}...")
                     licznik_zapisanych = 0
                     
                     for wpis in wpisy_lista:
+                        opis_caly = wpis.get('opis', 'BŁĄD WPISU')
+                        
+                        # NOWA LOGIKA ZAPISU (Request 1)
+                        lokal_dla_wpisu = identyfikator_odbioru # Domyślnie (fallback)
+                        usterka_dla_wpisu = opis_caly
+
+                        # Sprawdzamy, czy usterka ma prefix (np. "70/1 - Rysa")
+                        if ' - ' in opis_caly:
+                            parts = opis_caly.split(' - ', 1)
+                            if len(parts) == 2:
+                                lokal_dla_wpisu = parts[0]    # np. "70/1"
+                                usterka_dla_wpisu = parts[1]  # np. "Rysa"
+                        
                         dane_json = {
-                            "numer_lokalu_budynku": lokal,
-                            "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'),
+                            "numer_lokalu_budynku": lokal_dla_wpisu,
+                            "rodzaj_usterki": usterka_dla_wpisu,
                             "podmiot_odpowiedzialny": podmiot,
                             "link_do_zdjecia": ""
                         }
@@ -523,13 +521,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if zapisz_w_arkuszu(dane_json, message_time):
                             licznik_zapisanych += 1
                     
-                    await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla {lokal}.",
-                                                    reply_markup=ReplyKeyboardRemove())
+                    await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla {identyfikator_odbioru}.",
+                                                    reply_markup=START_KEYBOARD) # Pokaż klawiaturę startową
                 
                 chat_data.clear()
             else:
-                await update.message.reply_text("Żaden odbiór nie jest aktywny. Aby zakończyć, musisz najpierw go rozpocząć.",
-                                                reply_markup=ReplyKeyboardRemove())
+                await update.message.reply_text("Żaden odbiór nie jest aktywny.",
+                                                reply_markup=START_KEYBOARD)
             return
 
         # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór (manualny)
@@ -545,33 +543,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             podmiot = dane_startowe.get('podmiot_odpowiedzialny')
 
             if lokal_raw == "BRAK DANYCH" or podmiot == "BRAK DANYCH":
-                await update.message.reply_text("❌ Nie udało się rozpoznać celu (lokalu/szeregu) lub firmy.\n"
-                                                "Spróbuj ponownie, np: \n"
-                                                "'Rozpoczęcie odbioru, lokal 46/2, firma X'\n"
-                                                "'Rozpoczęcie odbioru, SZEREG 5, firma Y'",
-                                                reply_markup=ReplyKeyboardRemove())
+                await update.message.reply_text("❌ Nie udało się rozpoznać celu lub firmy.",
+                                                reply_markup=START_KEYBOARD)
             else:
                 target_name = ""
                 tryb_odbioru = ""
                 
                 if "szereg" in lokal_raw.lower():
-                    # Manualne rozpoczęcie trybu SZEREG
                     tryb_odbioru = "szereg"
                     target_name = lokal_raw.upper().strip()
-                    # Sprawdzamy, czy mamy taki szereg w danych
                     if target_name in DANE_SZEREGOW:
                         chat_data['lista_lokali_szeregu'] = DANE_SZEREGOW[target_name].get("lokale", [])
                     else:
-                        chat_data['lista_lokali_szeregu'] = [] # Brak danych, nie będzie przycisków
+                        chat_data['lista_lokali_szeregu'] = [] 
                     chat_data['biezacy_lokal_w_szeregu'] = None
                 else:
-                    # Manualne rozpoczęcie trybu LOKAL
                     tryb_odbioru = "lokal"
                     target_name = lokal_raw.lower().replace("lokal", "").strip().replace("/", ".")
                 
                 chat_data['odbiur_aktywny'] = True
-                chat_data['odbiur_lokal_do_arkusza'] = target_name
-                chat_data['odbiur_target_nazwa'] = target_name
+                chat_data['odbiur_identyfikator'] = target_name # Zapisujemy co odbieramy
+                chat_data['odbiur_target_nazwa'] = target_name # Dla folderu na Drive
                 chat_data['tryb_odbioru'] = tryb_odbioru
                 chat_data['odbiur_podmiot'] = podmiot
                 chat_data['odbiur_wpisy'] = []
@@ -580,33 +572,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 f"Cel: <b>{target_name}</b>\n"
                                                 f"Firma: <b>{podmiot}</b>\n\n"
                                                 f"Teraz wpisuj usterki.\n",
-                                                reply_markup=get_inline_keyboard(usterka_id=None, context=context),
+                                                reply_markup=ReplyKeyboardRemove(), # Ukryj "NOWY ODBIÓR"
                                                 parse_mode='HTML')
+                # Wyślij klawiaturę roboczą
+                await update.message.reply_text("Klawiatura robocza:",
+                                                reply_markup=get_inline_keyboard(usterka_id=None, context=context))
             
             return
 
-        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA (POPRAWIONY)
+        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
         if chat_data.get('odbiur_aktywny'):
             logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej: '{user_message}'")
             
             usterka_opis_raw = user_message.strip()
             
-            # NOWA LOGIKA: Dodajemy prefix lokalu, jeśli jest ustawiony
             prefix_lokalu = chat_data.get('biezacy_lokal_w_szeregu')
             if prefix_lokalu:
                 usterka_opis = f"{prefix_lokalu} - {usterka_opis_raw}"
             else:
+                # Jeśli żaden lokal nie jest wybrany, usterka zapisze się na cały szereg
                 usterka_opis = usterka_opis_raw
             
             usterka_id = str(uuid.uuid4())
             nowy_wpis = {
                 'id': usterka_id,
                 'typ': 'tekst',
-                'opis': usterka_opis # Zapisujemy już opisaną wersję
+                'opis': usterka_opis
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            # Odpowiadamy pełnym opisem
             await update.message.reply_text(f"➕ Dodano (tekst): <b>{usterka_opis}</b>\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
                                             reply_markup=get_inline_keyboard(usterka_id=usterka_id, context=context),
@@ -615,14 +609,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except json.JSONDecodeError as json_err:
         logger.error(f"Błąd parsowania JSON od Gemini (w logice sesji): {json_err}. Odpowiedź AI: {response.text}")
-        await update.message.reply_text("❌ Błąd analizy AI. Spróbuj sformułować wiadomość inaczej.")
+        await update.message.reply_text("❌ Błąd analizy AI. Spróbuj sformułować wiadomość inaczej.", reply_markup=START_KEYBOARD)
         return
     except Exception as session_err:
         logger.error(f"Wystąpił nieoczekiwany błąd w logice sesji: {session_err}")
-        await update.message.reply_text(f"❌ Wystąpił krytyczny błąd: {session_err}")
+        await update.message.reply_text(f"❌ Wystąpił krytyczny błąd: {session_err}", reply_markup=START_KEYBOARD)
         return
 
-    # --- LOGIKA DOMYŚLNA (FALLBACK) - ZMIENIONA (PROŚBA 2) ---
+    # --- LOGIKA DOMYŚLNA (FALLBACK) ---
     logger.info(f"Brak aktywnego odbioru. Przetwarzanie jako pojedyncze zgłoszenie: '{user_message}'")
     try:
         await update.message.reply_text("Przetwarzam jako pojedyncze zgłoszenie... 🧠")
@@ -632,47 +626,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dane_z_ai = json.loads(cleaned_text)
         logger.info(f"Gemini zwróciło JSON: {dane_z_ai}")
 
-        # ZMIANA (PROŚBA 2): Używamy AI tylko do lokalu i podmiotu.
-        # Rodzaj usterki bierzemy z pełnej wiadomości użytkownika.
         dane_do_zapisu = {
             "numer_lokalu_budynku": dane_z_ai.get('numer_lokalu_budynku', 'BRAK DANYCH'),
-            "rodzaj_usterki": user_message.strip(), # Kluczowa zmiana
+            "rodzaj_usterki": user_message.strip(), 
             "podmiot_odpowiedzialny": dane_z_ai.get('podmiot_odpowiedzialny', 'BRAK DANYCH'),
-            "link_do_zdjecia": "" # W tym trybie nie ma zdjęcia
+            "link_do_zdjecia": ""
         }
 
         if zapisz_w_arkuszu(dane_do_zapisu, message_time):
-            # Odpowiadamy nowymi danymi
             await update.message.reply_text(f"✅ Zgłoszenie (pojedyncze) przyjęte i zapisane:\n\n"
                                             f"Lokal: <b>{dane_do_zapisu.get('numer_lokalu_budynku')}</b>\n"
                                             f"Usterka: <b>{dane_do_zapisu.get('rodzaj_usterki')}</b>\n"
                                             f"Podmiot: <b>{dane_do_zapisu.get('podmiot_odpowiedzialny')}</b>",
-                                            reply_markup=ReplyKeyboardRemove(),
+                                            reply_markup=START_KEYBOARD, # Pokaż klawiaturę
                                             parse_mode='HTML')
         else:
-            await update.message.reply_text("❌ Błąd zapisu do bazy danych (Arkusza). Skontaktuj się z adminem.")
+            await update.message.reply_text("❌ Błąd zapisu do bazy danych (Arkusza).", reply_markup=START_KEYBOARD)
 
     except json.JSONDecodeError:
         logger.error(f"Błąd parsowania JSON od Gemini (fallback). Odpowiedź AI: {response.text}")
-        await update.message.reply_text("❌ Błąd analizy AI (fallback). Spróbuj sformułować zgłoszenie inaczej.")
+        await update.message.reply_text("❌ Błąd analizy AI (fallback).", reply_markup=START_KEYBOARD)
     except Exception as e:
         logger.error(f"Wystąpił nieoczekiwany błąd (fallback): {e}")
-        await update.message.reply_text(f"❌ Wystąpił krytyczny błąd (fallback): {e}")
+        await update.message.reply_text(f"❌ Wystąpił krytyczny błąd (fallback): {e}", reply_markup=START_KEYBOARD)
 
 
-# --- 7b. HANDLER DLA ZDJĘĆ (ZMIENIONY) ---
+# --- 7b. HANDLER DLA ZDJĘĆ ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Przechwytuje zdjęcie W TRAKCIE aktywnej sesji odbioru."""
     chat_data = context.chat_data
     
     if not chat_data.get('odbiur_aktywny'):
         await update.message.reply_text("Wyślij zdjęcie *po* rozpoczęciu odbioru. Teraz ta fotka zostanie zignorowana.",
-                                        reply_markup=ReplyKeyboardRemove())
+                                        reply_markup=START_KEYBOARD)
         return
 
     usterka_opis_raw = update.message.caption
     if not usterka_opis_raw:
-        await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!\nInaczej nie wiem, co zapisać. Wyślij ponownie z opisem.",
+        await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!",
                                         reply_markup=get_inline_keyboard(usterka_id=None, context=context))
         return
 
@@ -680,13 +671,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_name = chat_data.get('odbiur_target_nazwa')
     tryb = chat_data.get('tryb_odbioru')
     
-    # NOWA LOGIKA: Dodajemy prefix lokalu, jeśli jest ustawiony
     prefix_lokalu = chat_data.get('biezacy_lokal_w_szeregu')
     
     if prefix_lokalu:
-        # Pełny opis do zapisania w arkuszu
         opis_do_arkusza = f"{prefix_lokalu} - {usterka_opis_raw} (zdjęcie)"
-        # Opis do nazwy pliku (bez "(zdjęcie)")
         opis_do_nazwy_pliku = f"{prefix_lokalu} - {usterka_opis_raw}"
     else:
         opis_do_arkusza = f"{usterka_opis_raw} (zdjęcie)"
@@ -701,7 +689,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_bytes_io = io.BytesIO()
         await photo_file.download_to_memory(file_bytes_io)
         
-        # Używamy nowej nazwy do pliku
         success, message, file_id = upload_photo_to_drive(
             file_bytes_io, target_name, opis_do_nazwy_pliku, podmiot, tryb_odbioru=tryb
         )
@@ -711,12 +698,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             nowy_wpis = {
                 'id': usterka_id,
                 'typ': 'zdjecie',
-                'opis': opis_do_arkusza, # Zapisujemy pełny opis
+                'opis': opis_do_arkusza, 
                 'file_id': file_id
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            # Odpowiadamy pełnym opisem
             await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: <b>{message}</b>\n"
                                             f"➕ Usterka dodana do listy: <b>{opis_do_arkusza}</b>\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
@@ -732,11 +718,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         reply_markup=get_inline_keyboard(usterka_id=None, context=context))
 
 
-# --- 7c. HANDLER: Obsługa przycisków Inline (PRZEBUDOWANY) ---
+# --- 7c. HANDLER: Obsługa przycisków Inline ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obsługuje naciśnięcia przycisków inline."""
     query = update.callback_query
-    await query.answer() # Zawsze odpowiadamy najpierw
+    await query.answer() 
     
     chat_data = context.chat_data
     data = query.data
@@ -748,47 +734,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
         
         chat_data.clear()
-        keyboard = [
-            [InlineKeyboardButton("Pojedyncze lokale", callback_data="start_flow_pojedyncze")],
-            [InlineKeyboardButton("Całe szeregi", callback_data="start_flow_szeregi")]
-        ]
-        await query.edit_message_text(
-            "Wybierz tryb pracy:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        try:
+            await query.edit_message_text("Anulowano wybór.", reply_markup=None)
+        except Exception:
+            pass # Ignoruj, jeśli nie można edytować
+        await query.message.reply_text("Gotowy na nowy odbiór.", reply_markup=START_KEYBOARD)
         return
 
-    # --- Logika dla 'start_flow_pojedyncze' ---
-    elif data == 'start_flow_pojedyncze':
-        if chat_data.get('odbiur_aktywny'):
-            await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
-            return
-        
-        chat_data.clear()
-        chat_data['tryb_wyboru'] = 'pojedynczy' # Ustawiamy tryb
-        keyboard = build_szereg_keyboard()
-        await query.edit_message_text(
-            "Tryb: Pojedyncze Lokale.\nNajpierw wybierz Szereg, z którego pochodzi lokal:",
-            reply_markup=keyboard
-        )
-        return
-
-    # --- Logika dla 'start_flow_szeregi' ---
-    elif data == 'start_flow_szeregi':
-        if chat_data.get('odbiur_aktywny'):
-            await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
-            return
-        
-        chat_data.clear()
-        chat_data['tryb_wyboru'] = 'caly_szereg' # Ustawiamy tryb
-        keyboard = build_szereg_keyboard()
-        await query.edit_message_text(
-            "Tryb: Całe Szeregi.\nWybierz, który szereg chcesz odbierać:",
-            reply_markup=keyboard
-        )
-        return
-
-    # --- Logika dla 'szereg_' (rozdziela na podstawie trybu) ---
+    # --- Logika dla 'szereg_' ---
     elif data.startswith('szereg_'):
         if chat_data.get('odbiur_aktywny'):
             await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
@@ -796,79 +749,49 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         
         szereg_name = data.split('_', 1)[1]
         chat_data['wybrany_szereg'] = szereg_name
-        tryb_wyboru = chat_data.get('tryb_wyboru')
-
-        if tryb_wyboru == 'pojedynczy':
-            # Pokaż listę lokali
-            keyboard = build_lokal_keyboard(szereg_name)
-            await query.edit_message_text(
-                f"Wybrano: <b>{szereg_name}</b>.\nTeraz wybierz Lokal:",
-                reply_markup=keyboard,
-                parse_mode='HTML'
-            )
-        elif tryb_wyboru == 'caly_szereg':
-            # Zapytaj o firmę
-            chat_data['state'] = 'AWAITING_FIRMA_SZEREG'
-            await query.edit_message_text(
-                f"Wybrano: <b>CAŁY {szereg_name}</b>\n\n"
-                f"Proszę, <b>podaj teraz nazwę firmy</b> wykonawczej:",
-                parse_mode='HTML'
-            )
-        else:
-            await query.message.reply_text("Błąd trybu. Zacznij od /start.")
         
-        return
-
-    # --- Logika dla 'lokal_' (tylko dla trybu pojedynczego) ---
-    elif data.startswith('lokal_'):
-        if chat_data.get('odbiur_aktywny'):
-            await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
-            return
-            
-        lokal_name = data.split('_', 1)[1]
-        szereg_name = chat_data.get('wybrany_szereg', 'Brak')
-        
-        chat_data['wybrany_lokal'] = lokal_name
-        chat_data['state'] = 'AWAITING_FIRMA' # Czekamy na firmę
-        
+        # To jest teraz jedyna logika
+        chat_data['state'] = 'AWAITING_FIRMA_SZEREG'
         await query.edit_message_text(
-            f"Wybrano:\nSzereg: <b>{szereg_name}</b>\nLokal: <b>{lokal_name}</b>\n\n"
+            f"Wybrano: <b>CAŁY {szereg_name}</b>\n\n"
             f"Proszę, <b>podaj teraz nazwę firmy</b> wykonawczej:",
-            parse_mode='HTML',
-            reply_markup=None
+            parse_mode='HTML'
         )
         return
     
     # --- NOWA LOGIKA: Ustawianie aktywnego lokalu w trybie "Całe Szeregi" ---
     elif data.startswith("setlokal_"):
         if not chat_data.get('odbiur_aktywny'):
-            await query.message.reply_text("Sesja nieaktywna. Rozpocznij nową.", reply_markup=ReplyKeyboardRemove())
+            await query.message.reply_text("Sesja nieaktywna.", reply_markup=START_KEYBOARD)
             return
         
         lokal_name = data.split('_', 1)[1]
-        # Ustawiamy ten lokal jako "aktywny" do dodawania prefixu
         chat_data['biezacy_lokal_w_szeregu'] = lokal_name
         
-        # Dajemy znać użytkownikowi
         await query.answer(f"OK! Następne usterki będą dla lokalu: {lokal_name}")
-        # Edytujemy wiadomość z klawiaturą, aby nie "skakała"
+        
+        # Odświeżamy wiadomość, aby pokazać nową klawiaturę (jeśli była stara)
         try:
+            # Tworzymy tekst, który na pewno jest inny, aby uniknąć błędu "Message not modified"
+            nowy_tekst = f"Aktywny lokal dla usterek: <b>{lokal_name}</b>\n(Ostatnia akcja: {datetime.now().strftime('%H:%M:%S')})"
             await query.edit_message_text(
-                f"Aktywny lokal dla usterek: <b>{lokal_name}</b>\n(Poprzednia wiadomość: {query.message.text})",
+                nowy_tekst,
                 reply_markup=get_inline_keyboard(usterka_id=None, context=context),
                 parse_mode='HTML'
             )
         except Exception as e:
-             # Jak się nie da (np. tekst ten sam), wyślij nową
              logger.warning(f"Nie można edytować wiadomości po setlokal: {e}")
-             await query.message.reply_text(f"Aktywny lokal dla usterek zmieniony na: <b>{lokal_name}</b>", parse_mode='HTML')
+             # Jeśli edycja się nie uda, po prostu wyślij nową wiadomość z potwierdzeniem
+             await query.message.reply_text(f"Aktywny lokal dla usterek zmieniony na: <b>{lokal_name}</b>", 
+                                            parse_mode='HTML',
+                                            reply_markup=get_inline_keyboard(usterka_id=None, context=context))
         return
     
     # --- Logika dla 'cofnij' z ID ---
     elif data.startswith('cofnij_'):
         logger.info("Otrzymano callback 'cofnij' z ID")
         if not chat_data.get('odbiur_aktywny'):
-            await query.message.reply_text("Sesja już się zakończyła.", reply_markup=ReplyKeyboardRemove())
+            await query.message.reply_text("Sesja już się zakończyła.", reply_markup=START_KEYBOARD)
             return
 
         try:
@@ -890,7 +813,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             logger.warning(f"Próbowano usunąć usterkę {id_to_delete}, ale już nie istnieje.")
             await query.answer("Ta usterka została już usunięta.", show_alert=True)
             try:
-                await query.edit_message_text(f"--- TA USTERKA ZOSTAŁA JUŻ USUNIĘTA ---\n({query.message.text})", reply_markup=None)
+                await query.edit_message_text(f"--- TA USTERKA ZOSTAŁA JUŻ USUNIĘTA ---", reply_markup=None)
             except Exception:
                 pass
             return
@@ -928,25 +851,37 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == 'koniec_odbioru':
         logger.info("Otrzymano callback 'koniec_odbioru'")
         if not chat_data.get('odbiur_aktywny'):
-            await query.message.reply_text("Żaden odbiór nie jest aktywny.", reply_markup=ReplyKeyboardRemove())
+            await query.message.reply_text("Żaden odbiór nie jest aktywny.", reply_markup=START_KEYBOARD)
             return
         
-        lokal = chat_data.get('odbiur_lokal_do_arkusza')
+        identyfikator_odbioru = chat_data.get('odbiur_identyfikator', 'Brak ID Odbioru')
         podmiot = chat_data.get('odbiur_podmiot')
         wpisy_lista = chat_data.get('odbiur_wpisy', [])
         message_time = datetime.now() 
         
         if not wpisy_lista:
-            await query.message.reply_text(f"Zakończono odbiór dla {lokal}. Nie dodano żadnych usterek.",
-                                           reply_markup=ReplyKeyboardRemove())
+            await query.message.reply_text(f"Zakończono odbiór dla {identyfikator_odbioru}. Nie dodano żadnych usterek.",
+                                           reply_markup=START_KEYBOARD)
         else:
-            logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla {lokal}...")
+            logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla {identyfikator_odbioru}...")
             licznik_zapisanych = 0
             
             for wpis in wpisy_lista:
+                opis_caly = wpis.get('opis', 'BŁĄD WPISU')
+                
+                # NOWA LOGIKA ZAPISU (Request 1)
+                lokal_dla_wpisu = identyfikator_odbioru # Domyślnie (fallback)
+                usterka_dla_wpisu = opis_caly
+
+                if ' - ' in opis_caly:
+                    parts = opis_caly.split(' - ', 1)
+                    if len(parts) == 2:
+                        lokal_dla_wpisu = parts[0]
+                        usterka_dla_wpisu = parts[1]
+                
                 dane_json = {
-                    "numer_lokalu_budynku": lokal,
-                    "rodzaj_usterki": wpis.get('opis', 'BŁĄD WPISU'),
+                    "numer_lokalu_budynku": lokal_dla_wpisu,
+                    "rodzaj_usterki": usterka_dla_wpisu,
                     "podmiot_odpowiedzialny": podmiot,
                     "link_do_zdjecia": ""
                 }
@@ -958,8 +893,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 if zapisz_w_arkuszu(dane_json, message_time):
                     licznik_zapisanych += 1
             
-            await query.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla {lokal}.",
-                                           reply_markup=ReplyKeyboardRemove())
+            await query.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla {identyfikator_odbioru}.",
+                                           reply_markup=START_KEYBOARD)
         
         chat_data.clear()
         
@@ -970,7 +905,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             
     # --- Logika dla pustego przycisku (np. separator) ---
     elif data == "noop":
-        await query.answer() # Po prostu potwierdź, nic nie rób
+        await query.answer() 
         return
 
 
@@ -994,7 +929,7 @@ def main():
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Dodajemy handler dla /start
+    # ZMIANA: Zostawiamy /start jako komendę powitalną
     application.add_handler(CommandHandler("start", start_command))
 
     # Reszta handlerów
