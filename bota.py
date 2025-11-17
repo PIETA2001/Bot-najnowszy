@@ -145,10 +145,7 @@ try:
         logger.info(f"Pomyślnie znaleziono folder '{folder_name}' (ID: {folder_id})")
         return folder_id
 
-    # Folder "Lokale" jest teraz JEDYNYM, którego używamy do wysyłania zdjęć
     g_drive_main_folder_id = find_folder(G_DRIVE_MAIN_FOLDER_NAME)
-    
-    # Folder "Szeregi" nie jest już potrzebny do wysyłania zdjęć, ale zostawiamy na wypadek
     g_drive_szeregi_folder_id = find_folder(G_DRIVE_SZEREGI_FOLDER_NAME)
 
     if not g_drive_main_folder_id:
@@ -161,6 +158,7 @@ except Exception as e:
 
 
 # --- 4. Konfiguracja Gemini (AI) ---
+# AI jest teraz używane tylko do jednej, specyficznej rzeczy (manualny start), ale zostawiamy.
 model = genai.GenerativeModel(
     model_name="gemini-2.5-flash",
     generation_config={
@@ -215,7 +213,7 @@ def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = No
         ])
     
     keyboard.append([
-        InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='koniec_odbioru')
+        InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='konIEC_odbioru')
     ])
     
     return InlineKeyboardMarkup(keyboard)
@@ -242,17 +240,14 @@ def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
         logger.error(f"Błąd podczas zapisu do Google Sheets: {e}")
         return False
 
-# --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE (ZMIENIONA) ---
+# --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE ---
 def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, tryb_odbioru='lokal'):
     """Wyszukuje podfolder (lokalu lub szeregu) i wysyła do niego zdjęcie."""
     global drive_service, g_drive_main_folder_id, G_DRIVE_MAIN_FOLDER_NAME
     
     try:
-        # ZMIANA (Request 1): Wszystkie zdjęcia idą teraz do folderu "Lokale"
         parent_folder_id = g_drive_main_folder_id
-        parent_folder_name = G_DRIVE_MAIN_FOLDER_NAME
-
-        # target_name to teraz np. "70.1" (zgodnie z Request 3)
+        
         q_str = f"name='{target_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=False"
         
         response = drive_service.files().list(
@@ -280,7 +275,6 @@ def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, t
         else:
             target_folder_id = target_folder[0].get('id')
         
-        # ZMIANA (Request 2): usterka_name to teraz np. "Rysa" (bez prefixu)
         file_name = f"{usterka_name} - {podmiot_name}.jpg"
         file_metadata = {
             'name': file_name,
@@ -409,8 +403,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         chat_data['odbiur_aktywny'] = True
         chat_data['odbiur_identyfikator'] = target_name 
-        chat_data['odbiur_target_nazwa_do_zdjec'] = None # Nie ustawiamy, zależy od lokalu
-        chat_data['tryb_odbioru'] = "szereg" # Ważne dla logiki
+        chat_data['odbiur_target_nazwa_do_zdjec'] = None
+        chat_data['tryb_odbioru'] = "szereg"
         chat_data['odbiur_podmiot'] = firma
         chat_data['odbiur_wpisy'] = []
         chat_data['state'] = None
@@ -458,7 +452,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for wpis in wpisy_lista:
                         opis_caly = wpis.get('opis', 'BŁĄD WPISU')
                         
-                        # Logika zapisu (Request 1)
                         lokal_dla_wpisu = identyfikator_odbioru 
                         usterka_dla_wpisu = opis_caly
 
@@ -491,53 +484,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 reply_markup=START_KEYBOARD)
             return
 
-        # SCENARIUSZ 2: Użytkownik ZACZYNA odbiór (manualny)
-        if user_message.lower().startswith('rozpoczęcie odbioru'):
-            logger.info("Wykryto 'Rozpoczęcie odbioru', wysyłanie do Gemini...")
-            await update.message.reply_text("Rozpoczynam odbiór... 🧠 Analizuję dane celu i firmy...")
-            
-            response = model.generate_content(user_message)
-            cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-            dane_startowe = json.loads(cleaned_text)
-            
-            lokal_raw = dane_startowe.get('numer_lokalu_budynku')
-            podmiot = dane_startowe.get('podmiot_odpowiedzialny')
-
-            if lokal_raw == "BRAK DANYCH" or podmiot == "BRAK DANYCH":
-                await update.message.reply_text("❌ Nie udało się rozpoznać celu lub firmy.",
-                                                reply_markup=START_KEYBOARD)
-            else:
-                target_name = ""
-                tryb_odbioru = ""
-                
-                if "szereg" in lokal_raw.lower():
-                    tryb_odbioru = "szereg"
-                    target_name = lokal_raw.upper().strip()
-                    if target_name in DANE_SZEREGOW:
-                        chat_data['lista_lokali_szeregu'] = DANE_SZEREGOW[target_name].get("lokale", [])
-                    else:
-                        chat_data['lista_lokali_szeregu'] = [] 
-                    chat_data['biezacy_lokal_w_szeregu'] = None
-                else:
-                    tryb_odbioru = "lokal"
-                    target_name = lokal_raw.lower().replace("lokal", "").strip().replace("/", ".")
-                
-                chat_data['odbiur_aktywny'] = True
-                chat_data['odbiur_identyfikator'] = target_name 
-                chat_data['tryb_odbioru'] = tryb_odbioru
-                chat_data['odbiur_podmiot'] = podmiot
-                chat_data['odbiur_wpisy'] = []
-                
-                await update.message.reply_text(f"✅ Rozpoczęto odbiór (manualny) dla:\n\n"
-                                                f"Cel: <b>{target_name}</b>\n"
-                                                f"Firma: <b>{podmiot}</b>\n\n"
-                                                f"Teraz wpisuj usterki.\n",
-                                                reply_markup=ReplyKeyboardRemove(),
-                                                parse_mode='HTML')
-                await update.message.reply_text("Klawiatura robocza:",
-                                                reply_markup=get_inline_keyboard(usterka_id=None, context=context))
-            
-            return
+        # SCENARIUSZ 2: (Usunięty - manualne 'rozpoczęcie odbioru')
 
         # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
         if chat_data.get('odbiur_aktywny'):
@@ -572,50 +519,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     except json.JSONDecodeError as json_err:
-        logger.error(f"Błąd parsowania JSON od Gemini (w logice sesji): {json_err}. Odpowiedź AI: {response.text}")
-        await update.message.reply_text("❌ Błąd analizy AI. Spróbuj sformułować wiadomość inaczej.", reply_markup=START_KEYBOARD)
+        logger.error(f"Błąd parsowania JSON od Gemini: {json_err}.")
+        await update.message.reply_text("❌ Błąd analizy AI.", reply_markup=START_KEYBOARD)
         return
     except Exception as session_err:
         logger.error(f"Wystąpił nieoczekiwany błąd w logice sesji: {session_err}")
         await update.message.reply_text(f"❌ Wystąpił krytyczny błąd: {session_err}", reply_markup=START_KEYBOARD)
         return
 
-    # --- LOGIKA DOMYŚLNA (FALLBACK) ---
-    logger.info(f"Brak aktywnego odbioru. Przetwarzanie jako pojedyncze zgłoszenie: '{user_message}'")
-    try:
-        await update.message.reply_text("Przetwarzam jako pojedyncze zgłoszenie... 🧠")
-        
-        response = model.generate_content(user_message)
-        cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-        dane_z_ai = json.loads(cleaned_text)
-        logger.info(f"Gemini zwróciło JSON: {dane_z_ai}")
-
-        dane_do_zapisu = {
-            "numer_lokalu_budynku": dane_z_ai.get('numer_lokalu_budynku', 'BRAK DANYCH'),
-            "rodzaj_usterki": user_message.strip(), 
-            "podmiot_odpowiedzialny": dane_z_ai.get('podmiot_odpowiedzialny', 'BRAK DANYCH'),
-            "link_do_zdjecia": ""
-        }
-
-        if zapisz_w_arkuszu(dane_do_zapisu, message_time):
-            await update.message.reply_text(f"✅ Zgłoszenie (pojedyncze) przyjęte i zapisane:\n\n"
-                                            f"Lokal: <b>{dane_do_zapisu.get('numer_lokalu_budynku')}</b>\n"
-                                            f"Usterka: <b>{dane_do_zapisu.get('rodzaj_usterki')}</b>\n"
-                                            f"Podmiot: <b>{dane_do_zapisu.get('podmiot_odpowiedzialny')}</b>",
-                                            reply_markup=START_KEYBOARD,
-                                            parse_mode='HTML')
-        else:
-            await update.message.reply_text("❌ Błąd zapisu do bazy danych (Arkusza).", reply_markup=START_KEYBOARD)
-
-    except json.JSONDecodeError:
-        logger.error(f"Błąd parsowania JSON od Gemini (fallback). Odpowiedź AI: {response.text}")
-        await update.message.reply_text("❌ Błąd analizy AI (fallback).", reply_markup=START_KEYBOARD)
-    except Exception as e:
-        logger.error(f"Wystąpił nieoczekiwany błąd (fallback): {e}")
-        await update.message.reply_text(f"❌ Wystąpił krytyczny błąd (fallback): {e}", reply_markup=START_KEYBOARD)
+    # --- NOWA LOGIKA DOMYŚLNA (FALLBACK) ---
+    # Jeśli kod dotarł tutaj, a odbiór NIE jest aktywny,
+    # to jest to nieobsługiwana wiadomość.
+    if not chat_data.get('odbiur_aktywny'):
+        logger.warning(f"Otrzymano nieobsługiwaną wiadomość poza sesją: {user_message}")
+        await update.message.reply_text(
+            "Nieprawidłowa komenda. Aby rozpocząć, naciśnij przycisk 'NOWY ODBIÓR'.",
+            reply_markup=START_KEYBOARD
+        )
 
 
-# --- 7b. HANDLER DLA ZDJĘĆ (ZMIENIONY) ---
+# --- 7b. HANDLER DLA ZDJĘĆ ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Przechwytuje zdjęcie W TRAKCIE aktywnej sesji odbioru."""
     chat_data = context.chat_data
@@ -634,22 +557,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     podmiot = chat_data.get('odbiur_podmiot')
     tryb = chat_data.get('tryb_odbioru')
     
-    # --- NOWA LOGIKA DLA ZDJĘĆ (Request 2 i 3) ---
     prefix_lokalu = chat_data.get('biezacy_lokal_w_szeregu') # Np. "70/1"
     
-    # Request 2: Nazwa pliku to tylko opis usterki
     opis_do_nazwy_pliku = usterka_opis_raw.strip()
     
-    # Request 3: Ustalanie nazwy folderu docelowego (np. "70.1")
     target_folder_name = ""
     
     if prefix_lokalu:
-        # Konwertuj "70/1" na "70.1" dla nazwy folderu
         target_folder_name = prefix_lokalu.replace('/', '.')
-        # Do arkusza nadal idzie pełny opis z prefixem
         opis_do_arkusza = f"{prefix_lokalu} - {usterka_opis_raw} (zdjęcie)"
     else:
-        # Jeśli nie ma lokalu, nie wiemy, gdzie zapisać zdjęcie.
         await update.message.reply_text(
             "❌ BŁĄD: Nie wybrano lokalu dla zdjęcia.\n\n"
             "Proszę, <b>wybierz lokal z przycisków poniżej</b> i wyślij zdjęcie ponownie.",
@@ -657,8 +574,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
         return
-    
-    # --- KONIEC NOWEJ LOGIKI ---
 
     await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{opis_do_nazwy_pliku}'.\n"
                                       f"Wysyłam do folderu: <b>{target_folder_name}</b>...",
@@ -670,13 +585,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_bytes_io = io.BytesIO()
         await photo_file.download_to_memory(file_bytes_io)
         
-        # ZMIANA: Przekazujemy nowe, poprawne dane do funkcji uploadu:
         success, message, file_id = upload_photo_to_drive(
             file_bytes_io, 
-            target_folder_name,    # Np. "70.1" (Request 3)
-            opis_do_nazwy_pliku,   # Np. "Rysa" (Request 2)
+            target_folder_name,
+            opis_do_nazwy_pliku,
             podmiot, 
-            tryb_odbioru=tryb      # tryb nadal jest przekazywany, ale ignorowany (Request 1)
+            tryb_odbioru=tryb
         )
         
         if success:
@@ -684,7 +598,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             nowy_wpis = {
                 'id': usterka_id,
                 'typ': 'zdjecie',
-                'opis': opis_do_arkusza, # Zapisujemy pełny opis do arkusza
+                'opis': opis_do_arkusza, 
                 'file_id': file_id
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
@@ -851,7 +765,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             for wpis in wpisy_lista:
                 opis_caly = wpis.get('opis', 'BŁĄD WPISU')
                 
-                # Logika zapisu (Request 1)
                 lokal_dla_wpisu = identyfikator_odbioru
                 usterka_dla_wpisu = opis_caly
 
