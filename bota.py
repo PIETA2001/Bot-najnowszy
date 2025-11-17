@@ -213,7 +213,7 @@ def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = No
         ])
     
     keyboard.append([
-        InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='konIEC_odbioru')
+        InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='koniec_odbioru')
     ])
     
     return InlineKeyboardMarkup(keyboard)
@@ -841,3 +841,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
