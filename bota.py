@@ -399,20 +399,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             return
 
-        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
-        if chat_data.get('odbiur_aktywny'):
-            logger.info(f"Odbiór aktywny. Wysyłanie usterki '{user_message}' do Gemini...")
-            
-            # AI Zostaje na Twoje życzenie
-            response = model.generate_content(user_message) 
-            cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-            dane_usterki = json.loads(cleaned_text)
-            
-            usterka_opis = dane_usterki.get('rodzaj_usterki', user_message)
-            if usterka_opis == "BRAK DANYCH":
-                usterka_opis = user_message
-            
-            usterka_id = str(uuid.uuid4())
+       # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
+        if chat_data.get('odbiur_aktywny'):
+            logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej: '{user_message}'")
+            
+            # ZMIANA: Wyłączamy analizę AI w trakcie sesji.
+            # Bierzemy wiadomość użytkownika w całości jako opis usterki.
+            usterka_opis = user_message.strip()
+            
+            # --- USUNIĘTA SEKCJA AI ---
+            # response = model.generate_content(user_message) 
+            # cleaned_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+            # dane_usterki = json.loads(cleaned_text)
+            # usterka_opis = dane_usterki.get('rodzaj_usterki', user_message)
+            # if usterka_opis == "BRAK DANYCH":
+            #     usterka_opis = user_message
+            # --- KONIEC USUNIĘTEJ SEKCJI ---
+            
+            usterka_id = str(uuid.uuid4())
             nowy_wpis = {
                 'id': usterka_id,
                 'typ': 'tekst',
@@ -676,3 +680,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
