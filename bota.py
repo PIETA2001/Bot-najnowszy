@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 import difflib # Import dla dopasowywania ciągu
 
 # --- Importy Bibliotek (Usuwamy Google Gemini) ---
+# Usunięto: import google.generativeai as genai
+# Usunięto: from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import gspread
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -55,7 +57,9 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "RDR REMONTY SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
     "EL-ROM Sylwia Romanowska",
     "Complex Bruk Mateusz Oleksak",
-    "Usługi Budowlane Michał Piskorz"
+    "Usługi Budowlane Michał Piskorz",
+    "PRIMA TYNK Janusz Pelc"
+    
 ]
 
 # --- 3c. Dane do Przycisków ---
@@ -83,39 +87,42 @@ drive_service = None
 g_drive_main_folder_id = None
 g_drive_szeregi_folder_id = None
 
-# --- FUNKCJA WYSZUKUJĄCA FIRMĘ (ZAMIAST AI) ---
+# --- FUNKCJA WYSZUKUJĄCA FIRMĘ (ZAMIAST AI - STABILNY PYTHON) ---
 def dopasuj_firme_python(tekst_uzytkownika: str) -> str:
     """
-    Używa dopasowania ciągu znaków (fuzzy matching) wbudowanego w Pythonie,
-    aby znaleźć najlepiej pasującą firmę z LISTA_FIRM_WYKONAWCZYCH.
-    Threshold: 0.5 (dopasowanie 50%).
+    Używa dopasowania ciągu znaków (difflib) do znalezienia najlepiej pasującej firmy.
+    Minimalny próg dopasowania: 0.6 (60%).
     """
     search_term = tekst_uzytkownika.strip().upper()
-    best_match = None
-    best_score = 0.5 # Minimalny próg dopasowania
     
-    # 1. Sprawdzanie nazwisk/słów kluczowych
-    for firm_name in LISTA_FIRM_WYKONAWCZYCH:
-        # Normalizacja nazwy firmy
-        normalized_firm = firm_name.upper().replace('SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ', '').strip()
-        
-        # Obliczenie współczynnika podobieństwa
-        ratio = difflib.SequenceMatcher(None, search_term, normalized_firm).ratio()
-        
-        if ratio > best_score:
-            best_score = ratio
-            best_match = firm_name
-            
-        # Dodatkowy szybki test: jeśli słowo kluczowe jest w nazwie
-        if search_term in normalized_firm and ratio > 0.3: # Nawet jeśli ratio jest niższe, ale jest podciąg
-            if ratio > 0.8: # Preferujemy wyższe dopasowania
-                return firm_name
+    OFFICIAL_LIST = LISTA_FIRM_WYKONAWCZYCH 
+    
+    # Tworzenie mapowania czystej nazwy na oryginalną nazwę (usuwanie dużych spólek/znaków)
+    searchable_list = []
+    mapping = {}
 
-    if best_match:
-        logger.info(f"Python dopasował '{tekst_uzytkownika}' do '{best_match}' (Score: {best_score:.2f})")
-        return best_match
+    for firm_name in OFFICIAL_LIST:
+        # Normalizacja: usunięcie sp. z o.o. i konwersja na duże litery dla lepszego porównania
+        clean_name = firm_name.upper().replace('SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ', '').strip()
+        searchable_list.append(clean_name)
+        mapping[clean_name] = firm_name # Mapowanie czystej nazwy na oryginalną
+
+    # 1. Użycie difflib.get_close_matches (n=1, cutoff=0.6)
+    matches = difflib.get_close_matches(
+        search_term,
+        searchable_list,
+        n=1,
+        cutoff=0.6 
+    )
+
+    if matches:
+        best_match_cleaned = matches[0]
+        # Zwracamy oryginalną nazwę z listy
+        final_firm = mapping.get(best_match_cleaned, matches[0])
+        logger.info(f"Python dopasował '{tekst_uzytkownika}' do '{final_firm}' (Found match)")
+        return final_firm
     else:
-        # Fallback: jeśli nic nie pasuje
+        # 2. Fallback: Jeśli dopasowanie jest słabe (poniżej 60%) lub brak, używamy surowego wpisu
         result = f"INNA: {tekst_uzytkownika}"
         logger.warning(f"Python nie znalazł dopasowania dla '{tekst_uzytkownika}', użyto fallback.")
         return result
