@@ -43,7 +43,22 @@ WORKSHEET_NAME = 'Arkusz1'
 G_DRIVE_MAIN_FOLDER_NAME = 'Lokale'
 G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi'
 
-# --- 3b. Dane do Przycisków ---
+# --- 3b. Lista Firm Wykonawczych (Oficjalna) ---
+LISTA_FIRM_WYKONAWCZYCH = [
+    "ANETA NIEWIADOMSKA ANER",
+    "DOMHOMEGROUP SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
+    "KAMEX",
+    "EKO DOM DEVELOPER SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
+    "SIL GROUP IVAN STETSIUK",
+    "Kateryna Filiuk",
+    "VL-STAL Vladyslav Loshytskyi",
+    "RDR REMONTY SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
+    "EL-ROM Sylwia Romanowska",
+    "Complex Bruk Mateusz Oleksak",
+    "PRIMA TYNK Janusz Pelc"
+]
+
+# --- 3c. Dane do Przycisków ---
 DANE_SZEREGOW = {
     "Szereg 1": {"zakres": "49-54", "lokale": ["49/1", "49/2", "50/1", "50/2", "51/1", "51/2", "52/1", "52/2", "53/1", "53/2", "54/1", "54/2"]},
     "Szereg 2": {"zakres": "38-43", "lokale": ["38/1", "38/2", "39/1", "39/2", "40/1", "40/2", "41/1", "41/2", "42/1", "42/2", "43/1", "43/2"]},
@@ -157,34 +172,44 @@ except Exception as e:
     exit()
 
 
-# --- 4. Konfiguracja Gemini (AI) ---
-# AI jest teraz używane tylko do jednej, specyficznej rzeczy (manualny start), ale zostawiamy.
+# --- 4. Konfiguracja Gemini (AI) - TYLKO DO FIRM ---
+genai.configure(api_key=GEMINI_API_KEY)
+
+system_instruction_text = f"""
+Jesteś asystentem administracyjnym. 
+Twoim JEDYNYM zadaniem jest dopasowanie nazwy/imienia wpisanego przez użytkownika do oficjalnej listy wykonawców.
+
+Oto oficjalna lista firm:
+{json.dumps(LISTA_FIRM_WYKONAWCZYCH, ensure_ascii=False)}
+
+Zasady:
+1. Użytkownik poda potoczną nazwę, nazwisko, imię lub skrót (np. "pelc", "ivan", "kamex", "aneta").
+2. Ty masz zwrócić DOKŁADNĄ nazwę z powyższej listy, która najlepiej pasuje.
+3. Jeśli wpis pasuje do kilku (np. "remonty"), wybierz najbardziej prawdopodobną.
+4. Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, zwróć: "INNA: " + wpis użytkownika.
+5. Odpowiadaj TYLKO SAMYM TEKSTEM (nazwą firmy). Żadnych wstępów.
+"""
+
 model = genai.GenerativeModel(
     model_name="gemini-2.5-flash",
     generation_config={
-        "temperature": 0.2,
-        "max_output_tokens": 2048,
-        "response_mime_type": "application/json",
+        "temperature": 0.1, 
+        "max_output_tokens": 150,
+        "response_mime_type": "text/plain",
     },
-    system_instruction="""
-Twoim zadaniem jest analiza zgłoszenia serwisowego. Przetwórz wiadomość użytkownika i wyekstrahuj DOKŁADNIE 3 informacje: numer_lokalu_budynku, rodzaj_usterki, podmiot_odpowiedzialny.
-
-Zawsze odpowiadaj WYŁĄCZNIE w formacie JSON, zgodnie z tym schematem:
-{
-  "numer_lokalu_budynku": "string",
-  "rodzaj_usterki": "string",
-  "podmiot_odpowiedzialny": "string"
-}
-
-Ustalenia:
-1.  numer_lokalu_budynku: (np. "15", "104B", "Budynek C, klatka 2", "Lokal 46/2", "SZEREG 5")
-2.  rodzaj_usterki: (np. "cieknący kran", "brak prądu", "winda nie działa", "porysowana szyba")
-3.  podmiot_odpowiedzialny: (np. "administracja", "serwis", "konserwator", "deweloper", "domhomegroup", "Janusz Pelc", "Michał Piskorz").
-4.  Jeśli jakiejś informacji brakuje, wstaw w jej miejsce "BRAK DANYCH".
-5.  Jeśli wiadomość to 'Rozpoczęcie odbioru', 'rodzaj_usterki' powinien być "Rozpoczęcie odbioru".
-6.  Nigdy nie dodawaj żadnego tekstu przed ani po obiekcie JSON.
-"""
+    system_instruction=system_instruction_text
 )
+
+def dopasuj_firme_ai(tekst_uzytkownika: str) -> str:
+    """Wysyła tekst usera do AI i zwraca dopasowaną nazwę firmy."""
+    try:
+        response = model.generate_content(tekst_uzytkownika)
+        wynik = response.text.strip()
+        logger.info(f"AI zamieniło '{tekst_uzytkownika}' na '{wynik}'")
+        return wynik
+    except Exception as e:
+        logger.error(f"Błąd AI przy dopasowywaniu firmy: {e}")
+        return tekst_uzytkownika
 
 
 # --- Funkcja tworząca klawiaturę Inline ---
@@ -227,9 +252,9 @@ def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
         
         nowy_wiersz = [
             data_str,
-            dane_json.get('numer_lokalu_budynku', 'BŁĄD JSON'),
-            dane_json.get('rodzaj_usterki', 'BŁĄD JSON'),
-            dane_json.get('podmiot_odpowiedzialny', 'BŁĄD JSON'),
+            dane_json.get('numer_lokalu_budynku', 'BŁĄD'),
+            dane_json.get('rodzaj_usterki', 'BŁĄD'),
+            dane_json.get('podmiot_odpowiedzialny', 'BŁĄD'),
             dane_json.get('link_do_zdjecia', '')
         ]
         
@@ -391,7 +416,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
              await update.message.reply_text("Oczekuję na nazwę firmy...")
              return
 
-        firma = user_message.strip()
+        wpis_usera = user_message.strip()
+        await update.message.reply_text(f"🔎 Szukam firmy pasującej do: '{wpis_usera}'...")
+        
+        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY ---
+        firma = dopasuj_firme_ai(wpis_usera)
+        # -----------------------------------------
+
         szereg_name = chat_data.get('wybrany_szereg', 'BŁĄD STANU')
         
         if szereg_name == 'BŁĄD STANU':
@@ -415,7 +446,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Rozpoczynam odbiór...", reply_markup=ReplyKeyboardRemove())
         
         await update.message.reply_text(f"✅ Rozpoczęto odbiór dla: <b>CAŁY {target_name}</b>\n"
-                                        f"Firma: <b>{firma}</b>\n\n"
+                                        f"Wykonawca: <b>{firma}</b>\n\n"
                                         f"Teraz <b>koniecznie wybierz lokal z przycisków poniżej</b> i wpisuj usterki.\n",
                                         reply_markup=get_inline_keyboard(usterka_id=None, context=context),
                                         parse_mode='HTML')
@@ -484,8 +515,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                 reply_markup=START_KEYBOARD)
             return
 
-        # SCENARIUSZ 2: (Usunięty - manualne 'rozpoczęcie odbioru')
-
         # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
         if chat_data.get('odbiur_aktywny'):
             logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej: '{user_message}'")
@@ -502,6 +531,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+            # Tutaj po prostu łączymy lokal z tekstem - bez AI
             usterka_opis = f"{prefix_lokalu} - {usterka_opis_raw}"
             
             usterka_id = str(uuid.uuid4())
@@ -512,24 +542,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            await update.message.reply_text(f"➕ Dodano (tekst): <b>{usterka_opis}</b>\n"
+            await update.message.reply_text(f"➕ Dodano: <b>{usterka_opis}</b>\n"
                                             f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
                                             reply_markup=get_inline_keyboard(usterka_id=usterka_id, context=context),
                                             parse_mode='HTML')
             return
 
-    except json.JSONDecodeError as json_err:
-        logger.error(f"Błąd parsowania JSON od Gemini: {json_err}.")
-        await update.message.reply_text("❌ Błąd analizy AI.", reply_markup=START_KEYBOARD)
-        return
     except Exception as session_err:
         logger.error(f"Wystąpił nieoczekiwany błąd w logice sesji: {session_err}")
         await update.message.reply_text(f"❌ Wystąpił krytyczny błąd: {session_err}", reply_markup=START_KEYBOARD)
         return
 
-    # --- NOWA LOGIKA DOMYŚLNA (FALLBACK) ---
-    # Jeśli kod dotarł tutaj, a odbiór NIE jest aktywny,
-    # to jest to nieobsługiwana wiadomość.
+    # --- FALLBACK ---
     if not chat_data.get('odbiur_aktywny'):
         logger.warning(f"Otrzymano nieobsługiwaną wiadomość poza sesją: {user_message}")
         await update.message.reply_text(
@@ -576,9 +600,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{opis_do_nazwy_pliku}'.\n"
-                                      f"Wysyłam do folderu: <b>{target_folder_name}</b>...",
-                                      reply_markup=get_inline_keyboard(usterka_id=None, context=context),
-                                      parse_mode='HTML')
+                                    f"Wysyłam do folderu: <b>{target_folder_name}</b>...",
+                                    reply_markup=get_inline_keyboard(usterka_id=None, context=context),
+                                    parse_mode='HTML')
 
     try:
         photo_file = await update.message.photo[-1].get_file()
@@ -653,7 +677,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         chat_data['state'] = 'AWAITING_FIRMA_SZEREG'
         await query.edit_message_text(
             f"Wybrano: <b>CAŁY {szereg_name}</b>\n\n"
-            f"Proszę, <b>podaj teraz nazwę firmy</b> wykonawczej:",
+            f"Proszę, <b>podaj teraz nazwę firmy</b> wykonawczej (możesz wpisać skrót, np. 'Pelc' lub 'Ivan'):",
             parse_mode='HTML'
         )
         return
@@ -841,4 +865,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
