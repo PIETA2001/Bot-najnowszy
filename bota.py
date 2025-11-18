@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 # --- Importy Bibliotek ---
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold # DODANE
 import gspread
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -54,8 +55,7 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "VL-STAL Vladyslav Loshytskyi",
     "RDR REMONTY SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
     "EL-ROM Sylwia Romanowska",
-    "Complex Bruk Mateusz Oleksak",
-    "PRIMA TYNK Janusz Pelc"
+    "Complex Bruk Mateusz Oleksak"
 ]
 
 # --- 3c. Dane do Przycisków ---
@@ -176,18 +176,16 @@ except Exception as e:
 genai.configure(api_key=GEMINI_API_KEY)
 
 system_instruction_text = f"""
-Jesteś asystentem administracyjnym. 
-Twoim JEDYNYM zadaniem jest dopasowanie nazwy/imienia wpisanego przez użytkownika do oficjalnej listy wykonawców.
-
-Oto oficjalna lista firm:
+Jesteś inteligentnym asystentem dopasowującym nazwy firm.
+Twoim zadaniem jest dopasowanie wpisu użytkownika do jednej z poniższych firm z listy oficjalnej.
+Lista firm:
 {json.dumps(LISTA_FIRM_WYKONAWCZYCH, ensure_ascii=False)}
 
 Zasady:
 1. Użytkownik poda potoczną nazwę, nazwisko, imię lub skrót (np. "pelc", "ivan", "kamex", "aneta").
-2. Ty masz zwrócić DOKŁADNĄ nazwę z powyższej listy, która najlepiej pasuje.
-3. Jeśli wpis pasuje do kilku (np. "remonty"), wybierz najbardziej prawdopodobną.
-4. Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, zwróć: "INNA: " + wpis użytkownika.
-5. Odpowiadaj TYLKO SAMYM TEKSTEM (nazwą firmy). Żadnych wstępów.
+2. Ty masz zwrócić DOKŁADNĄ nazwę z listy, która najlepiej pasuje, **otoczoną cudzysłowami (")**.
+3. Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, zwróć wpis użytkownika poprzedzony "INNA: " i otoczony cudzysłowami.
+4. Zwróć TYLKO SAM TEKST (nazwę w cudzysłowach) i nic więcej.
 """
 
 model = genai.GenerativeModel(
@@ -197,18 +195,31 @@ model = genai.GenerativeModel(
         "max_output_tokens": 150,
         "response_mime_type": "text/plain",
     },
+    # Dodanie safety settings w celu zminimalizowania błędu finish_reason=2
+    safety_settings=[
+        {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+    ],
     system_instruction=system_instruction_text
 )
 
 def dopasuj_firme_ai(tekst_uzytkownika: str) -> str:
-    """Wysyła tekst usera do AI i zwraca dopasowaną nazwę firmy."""
+    """Wysyła tekst usera do AI, zwraca dopasowaną nazwę firmy i obsługuje błędy API."""
     try:
         response = model.generate_content(tekst_uzytkownika)
         wynik = response.text.strip()
+        
+        # Nowa logika: Usuń cudzysłowy (") na początku i na końcu
+        if wynik.startswith('"') and wynik.endswith('"'):
+             wynik = wynik[1:-1]
+
         logger.info(f"AI zamieniło '{tekst_uzytkownika}' na '{wynik}'")
         return wynik
     except Exception as e:
         logger.error(f"Błąd AI przy dopasowywaniu firmy: {e}")
+        # Fallback: zwracamy to co wpisał user
         return tekst_uzytkownika
 
 
@@ -531,7 +542,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            # Tutaj po prostu łączymy lokal z tekstem - bez AI
+            # Połączenie lokal + tekst usterki (bez analizy AI)
             usterka_opis = f"{prefix_lokalu} - {usterka_opis_raw}"
             
             usterka_id = str(uuid.uuid4())
