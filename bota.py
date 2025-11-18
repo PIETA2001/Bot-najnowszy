@@ -60,6 +60,7 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "Usługi Budowlane Michał Piskorz",
     "PRIMA TYNK Janusz Pelc",
     "Dachy płaskie hydroizolacje Grzegorz Madej"
+    
 ]
 
 # --- 3c. Dane do Przycisków ---
@@ -317,18 +318,32 @@ def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = No
     return InlineKeyboardMarkup(keyboard)
 
 
-# --- 6. Funkcja do Zapisu w Arkuszu ---
+# --- 6. Funkcja do Zapisu w Arkuszu (AKTUALIZACJA ZDJĘCIA W KOMÓRCE) ---
 def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
     """Zapisuje przeanalizowane dane w nowym wierszu Arkusza Google."""
     try:
         data_str = data_telegram.strftime('%Y-%m-%d %H:%M:%S')
         
+        # Pobieramy dane zdjęcia
+        link_do_zdjecia_view = dane_json.get('link_do_zdjecia', '') # Zwykły link
+        file_id_ze_zdjecia = dane_json.get('file_id') # ID pliku na Drive
+
+        # NOWA KOLUMNA: Tworzenie formuły =IMAGE()
+        # Używamy trybu 2 (Stretch/Fit) lub 1 (Resize). Tryb 2 jest bezpieczny dla ustalonej wysokości.
+        zdjecie_w_komorce_formula = ""
+        if file_id_ze_zdjecia:
+            # URL do bezpośredniego pobrania/widoku dla formuły IMAGE
+            image_url = f"https://drive.google.com/uc?export=view&id={file_id_ze_zdjecia}"
+            # Zwróć uwagę na cudzysłowy w formule Excela/Sheets
+            zdjecie_w_komorce_formula = f'=IMAGE("{image_url}"; 2)'
+        
         nowy_wiersz = [
-            data_str,
-            dane_json.get('numer_lokalu_budynku', 'BŁĄD'),
-            dane_json.get('rodzaj_usterki', 'BŁĄD'),
-            dane_json.get('podmiot_odpowiedzialny', 'BŁĄD'),
-            dane_json.get('link_do_zdjecia', '')
+            data_str, # A
+            dane_json.get('numer_lokalu_budynku', 'BŁĄD'), # B
+            dane_json.get('rodzaj_usterki', 'BŁĄD'), # C
+            dane_json.get('podmiot_odpowiedzialny', 'BŁĄD'), # D
+            link_do_zdjecia_view, # E (Klikalny link)
+            zdjecie_w_komorce_formula # F (Obrazek w komórce)
         ]
         
         worksheet.append_row(nowy_wiersz, value_input_option='USER_ENTERED')
@@ -575,6 +590,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if file_id_ze_zdjecia:
                             link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
                             dane_json['link_do_zdjecia'] = link_zdjecia
+                            dane_json['file_id'] = file_id_ze_zdjecia # Ważne dla zapisu formuły IMAGE
                         
                         if zapisz_w_arkuszu(dane_json, message_time):
                             licznik_zapisanych += 1
@@ -881,6 +897,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 if file_id_ze_zdjecia:
                     link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
                     dane_json['link_do_zdjecia'] = link_zdjecia
+                    dane_json['file_id'] = file_id_ze_zdjecia # Ważne dla zapisu formuły IMAGE
                 
                 if zapisz_w_arkuszu(dane_json, message_time):
                     licznik_zapisanych += 1
@@ -938,4 +955,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
