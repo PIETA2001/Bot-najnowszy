@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # --- Importy Bibliotek ---
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold # DODANE
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import gspread
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -55,7 +55,8 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "VL-STAL Vladyslav Loshytskyi",
     "RDR REMONTY SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ",
     "EL-ROM Sylwia Romanowska",
-    "Complex Bruk Mateusz Oleksak"
+    "Complex Bruk Mateusz Oleksak",
+    "Usługi Budowlane Michał Piskorz"
 ]
 
 # --- 3c. Dane do Przycisków ---
@@ -183,19 +184,31 @@ Lista firm:
 
 Zasady:
 1. Użytkownik poda potoczną nazwę, nazwisko, imię lub skrót (np. "pelc", "ivan", "kamex", "aneta").
-2. Ty masz zwrócić DOKŁADNĄ nazwę z listy, która najlepiej pasuje, **otoczoną cudzysłowami (")**.
-3. Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, zwróć wpis użytkownika poprzedzony "INNA: " i otoczony cudzysłowami.
-4. Zwróć TYLKO SAM TEKST (nazwę w cudzysłowach) i nic więcej.
+2. Ty masz zwrócić DOKŁADNĄ nazwę z listy, która najlepiej pasuje.
+3. Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, użyj wpisu użytkownika poprzedzonego "INNA: ".
+4. ZAWSZE odpowiedz w formacie JSON, wypełniając pole 'dopasowana_firma'.
 """
+
+# Schemat odpowiedzi JSON
+FIRM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "dopasowana_firma": {
+            "type": "string",
+            "description": "Dokładnie dopasowana nazwa firmy lub 'INNA: [wpis_uzytkownika]'."
+        }
+    },
+    "required": ["dopasowana_firma"]
+}
 
 model = genai.GenerativeModel(
     model_name="gemini-2.5-flash",
     generation_config={
         "temperature": 0.1, 
         "max_output_tokens": 150,
-        "response_mime_type": "text/plain",
+        "response_mime_type": "application/json",
+        "response_schema": FIRM_SCHEMA,
     },
-    # Dodanie safety settings w celu zminimalizowania błędu finish_reason=2
     safety_settings=[
         {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
         {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
@@ -206,20 +219,27 @@ model = genai.GenerativeModel(
 )
 
 def dopasuj_firme_ai(tekst_uzytkownika: str) -> str:
-    """Wysyła tekst usera do AI, zwraca dopasowaną nazwę firmy i obsługuje błędy API."""
+    """Wysyła tekst usera do AI, zwraca dopasowaną nazwę firmy (parsowanie JSON)."""
     try:
         response = model.generate_content(tekst_uzytkownika)
-        wynik = response.text.strip()
         
-        # Nowa logika: Usuń cudzysłowy (") na początku i na końcu
-        if wynik.startswith('"') and wynik.endswith('"'):
-             wynik = wynik[1:-1]
+        # Weryfikacja finish_reason w celu ominięcia błędu finish_reason=2
+        # FINISH_REASON_STOP (wartość 1) jest jedynym oczekiwanym zakończeniem.
+        if not response.candidates or response.candidates[0].finish_reason.value != 1: 
+            logger.error(f"AI ZABLOKOWAŁO odpowiedź (finish_reason: {response.candidates[0].finish_reason.value if response.candidates else 'BRAK'}). Powrót do surowego wpisu.")
+            return tekst_uzytkownika 
 
-        logger.info(f"AI zamieniło '{tekst_uzytkownika}' na '{wynik}'")
+        json_data = json.loads(response.text)
+        wynik = json_data.get("dopasowana_firma", tekst_uzytkownika)
+        
+        logger.info(f"AI zamieniło '{tekst_uzytkownika}' na '{wynik}' (JSON)")
         return wynik
+        
+    except json.JSONDecodeError:
+        logger.error(f"Błąd parsowania JSON z AI. Raw response: {response.text}")
+        return tekst_uzytkownika
     except Exception as e:
-        logger.error(f"Błąd AI przy dopasowywaniu firmy: {e}")
-        # Fallback: zwracamy to co wpisał user
+        logger.error(f"Krytyczny błąd API/Gemini: {e}")
         return tekst_uzytkownika
 
 
@@ -430,7 +450,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wpis_usera = user_message.strip()
         await update.message.reply_text(f"🔎 Szukam firmy pasującej do: '{wpis_usera}'...")
         
-        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY ---
+        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY (TERAZ JSON) ---
         firma = dopasuj_firme_ai(wpis_usera)
         # -----------------------------------------
 
