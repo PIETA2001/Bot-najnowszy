@@ -173,23 +173,20 @@ except Exception as e:
     exit()
 
 
-# --- 4. Konfiguracja Gemini (AI) - TYLKO DO FIRM ---
+# ----------------------------------------------------
+# --- 4. KONFIGURACJA GEMINI (STABILNY JSON) ---
+# ----------------------------------------------------
 genai.configure(api_key=GEMINI_API_KEY)
 
-system_instruction_text = f"""
+# Instrukcja systemowa - krótka, aby uniknąć blokady
+system_instruction_text = """
 Jesteś inteligentnym asystentem dopasowującym nazwy firm.
 Twoim zadaniem jest dopasowanie wpisu użytkownika do jednej z poniższych firm z listy oficjalnej.
-Lista firm:
-{json.dumps(LISTA_FIRM_WYKONAWCZYCH, ensure_ascii=False)}
-
-Zasady:
-1. Użytkownik poda potoczną nazwę, nazwisko, imię lub skrót (np. "pelc", "ivan", "kamex", "aneta").
-2. Ty masz zwrócić DOKŁADNĄ nazwę z listy, która najlepiej pasuje.
-3. Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, użyj wpisu użytkownika poprzedzonego "INNA: ".
-4. ZAWSZE odpowiedz w formacie JSON, wypełniając pole 'dopasowana_firma'.
+Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, użyj wpisu użytkownika poprzedzonego "INNA: ".
+ZAWSZE odpowiedz w formacie JSON, wypełniając pole 'dopasowana_firma'.
 """
 
-# Schemat odpowiedzi JSON
+# Schemat odpowiedzi JSON, wymuszający konkretną strukturę
 FIRM_SCHEMA = {
     "type": "object",
     "properties": {
@@ -209,6 +206,7 @@ model = genai.GenerativeModel(
         "response_mime_type": "application/json",
         "response_schema": FIRM_SCHEMA,
     },
+    # Niskie ustawienia bezpieczeństwa, aby uniknąć blokady długiego promptu
     safety_settings=[
         {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
         {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
@@ -219,16 +217,27 @@ model = genai.GenerativeModel(
 )
 
 def dopasuj_firme_ai(tekst_uzytkownika: str) -> str:
-    """Wysyła tekst usera do AI, zwraca dopasowaną nazwę firmy (parsowanie JSON)."""
+    """
+    Wysyła tekst usera do AI, zwraca dopasowaną nazwę firmy (parsowanie JSON).
+    Lista firm jest dodawana do TREŚCI ZAPYTANIA, co jest stabilniejsze.
+    """
+    # Budujemy kontekst (listę firm) w treści żądania
+    lista_firm_str = ", ".join(LISTA_FIRM_WYKONAWCZYCH)
+    
+    prompt = f"""
+    Oficjalna lista firm do wyboru: {lista_firm_str}
+    Wpis użytkownika: {tekst_uzytkownika}
+    """
+
     try:
-        response = model.generate_content(tekst_uzytkownika)
+        response = model.generate_content(prompt)
         
         # Weryfikacja finish_reason w celu ominięcia błędu finish_reason=2
-        # FINISH_REASON_STOP (wartość 1) jest jedynym oczekiwanym zakończeniem.
         if not response.candidates or response.candidates[0].finish_reason.value != 1: 
             logger.error(f"AI ZABLOKOWAŁO odpowiedź (finish_reason: {response.candidates[0].finish_reason.value if response.candidates else 'BRAK'}). Powrót do surowego wpisu.")
             return tekst_uzytkownika 
 
+        # Parsowanie wymuszonego JSON
         json_data = json.loads(response.text)
         wynik = json_data.get("dopasowana_firma", tekst_uzytkownika)
         
@@ -450,7 +459,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wpis_usera = user_message.strip()
         await update.message.reply_text(f"🔎 Szukam firmy pasującej do: '{wpis_usera}'...")
         
-        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY (TERAZ JSON) ---
+        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY ---
         firma = dopasuj_firme_ai(wpis_usera)
         # -----------------------------------------
 
