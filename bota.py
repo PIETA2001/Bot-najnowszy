@@ -5,10 +5,9 @@ import io
 import uuid
 from datetime import datetime
 from dotenv import load_dotenv
+import difflib # Import dla dopasowywania ciągu
 
-# --- Importy Bibliotek ---
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+# --- Importy Bibliotek (Usuwamy Google Gemini) ---
 import gspread
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -29,10 +28,10 @@ logger = logging.getLogger(__name__)
 # --- 2. Ładowanie Kluczy API ---
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+# Usunięto: GEMINI_API_KEY (już niepotrzebny)
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    logger.critical("BŁĄD: Nie znaleziono tokenów (TELEGRAM_TOKEN lub GEMINI_API_KEY) w pliku .env")
+if not TELEGRAM_TOKEN:
+    logger.critical("BŁĄD: Nie znaleziono tokenu TELEGRAM_TOKEN w pliku .env")
     exit()
 
 # --- 3. Konfiguracja Google ---
@@ -83,6 +82,47 @@ worksheet = None
 drive_service = None
 g_drive_main_folder_id = None
 g_drive_szeregi_folder_id = None
+
+# --- FUNKCJA WYSZUKUJĄCA FIRMĘ (ZAMIAST AI) ---
+def dopasuj_firme_python(tekst_uzytkownika: str) -> str:
+    """
+    Używa dopasowania ciągu znaków (fuzzy matching) wbudowanego w Pythonie,
+    aby znaleźć najlepiej pasującą firmę z LISTA_FIRM_WYKONAWCZYCH.
+    Threshold: 0.5 (dopasowanie 50%).
+    """
+    search_term = tekst_uzytkownika.strip().upper()
+    best_match = None
+    best_score = 0.5 # Minimalny próg dopasowania
+    
+    # 1. Sprawdzanie nazwisk/słów kluczowych
+    for firm_name in LISTA_FIRM_WYKONAWCZYCH:
+        # Normalizacja nazwy firmy
+        normalized_firm = firm_name.upper().replace('SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ', '').strip()
+        
+        # Obliczenie współczynnika podobieństwa
+        ratio = difflib.SequenceMatcher(None, search_term, normalized_firm).ratio()
+        
+        if ratio > best_score:
+            best_score = ratio
+            best_match = firm_name
+            
+        # Dodatkowy szybki test: jeśli słowo kluczowe jest w nazwie
+        if search_term in normalized_firm and ratio > 0.3: # Nawet jeśli ratio jest niższe, ale jest podciąg
+            if ratio > 0.8: # Preferujemy wyższe dopasowania
+                return firm_name
+
+    if best_match:
+        logger.info(f"Python dopasował '{tekst_uzytkownika}' do '{best_match}' (Score: {best_score:.2f})")
+        return best_match
+    else:
+        # Fallback: jeśli nic nie pasuje
+        result = f"INNA: {tekst_uzytkownika}"
+        logger.warning(f"Python nie znalazł dopasowania dla '{tekst_uzytkownika}', użyto fallback.")
+        return result
+
+# Zastępujemy starą nazwę funkcji dla czytelności w handlerach
+dopasuj_firme_ai = dopasuj_firme_python
+
 
 def get_google_creds():
     """Obsługuje logowanie OAuth 2.0 i przechowuje token."""
@@ -171,85 +211,6 @@ try:
 except Exception as e:
     logger.critical(f"BŁĄD KRYTYCZNY: Nie można połączyć z Google: {e}")
     exit()
-
-
-# ----------------------------------------------------
-# --- 4. KONFIGURACJA GEMINI (STABILNY JSON) ---
-# ----------------------------------------------------
-genai.configure(api_key=GEMINI_API_KEY)
-
-# Instrukcja systemowa - krótka, aby uniknąć blokady
-system_instruction_text = """
-Jesteś inteligentnym asystentem dopasowującym nazwy firm.
-Twoim zadaniem jest dopasowanie wpisu użytkownika do jednej z poniższych firm z listy oficjalnej.
-Jeśli wpis kompletnie nie pasuje do żadnej firmy z listy, użyj wpisu użytkownika poprzedzonego "INNA: ".
-ZAWSZE odpowiedz w formacie JSON, wypełniając pole 'dopasowana_firma'.
-"""
-
-# Schemat odpowiedzi JSON, wymuszający konkretną strukturę
-FIRM_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "dopasowana_firma": {
-            "type": "string",
-            "description": "Dokładnie dopasowana nazwa firmy lub 'INNA: [wpis_uzytkownika]'."
-        }
-    },
-    "required": ["dopasowana_firma"]
-}
-
-model = genai.GenerativeModel(
-    model_name="gemini-2.5-flash",
-    generation_config={
-        "temperature": 0.1, 
-        "max_output_tokens": 150,
-        "response_mime_type": "application/json",
-        "response_schema": FIRM_SCHEMA,
-    },
-    # Niskie ustawienia bezpieczeństwa, aby uniknąć blokady długiego promptu
-    safety_settings=[
-        {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-        {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
-        {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-        {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-    ],
-    system_instruction=system_instruction_text
-)
-
-def dopasuj_firme_ai(tekst_uzytkownika: str) -> str:
-    """
-    Wysyła tekst usera do AI, zwraca dopasowaną nazwę firmy (parsowanie JSON).
-    Lista firm jest dodawana do TREŚCI ZAPYTANIA, co jest stabilniejsze.
-    """
-    # Budujemy kontekst (listę firm) w treści żądania
-    lista_firm_str = ", ".join(LISTA_FIRM_WYKONAWCZYCH)
-    
-    prompt = f"""
-    Oficjalna lista firm do wyboru: {lista_firm_str}
-    Wpis użytkownika: {tekst_uzytkownika}
-    """
-
-    try:
-        response = model.generate_content(prompt)
-        
-        # Weryfikacja finish_reason w celu ominięcia błędu finish_reason=2
-        if not response.candidates or response.candidates[0].finish_reason.value != 1: 
-            logger.error(f"AI ZABLOKOWAŁO odpowiedź (finish_reason: {response.candidates[0].finish_reason.value if response.candidates else 'BRAK'}). Powrót do surowego wpisu.")
-            return tekst_uzytkownika 
-
-        # Parsowanie wymuszonego JSON
-        json_data = json.loads(response.text)
-        wynik = json_data.get("dopasowana_firma", tekst_uzytkownika)
-        
-        logger.info(f"AI zamieniło '{tekst_uzytkownika}' na '{wynik}' (JSON)")
-        return wynik
-        
-    except json.JSONDecodeError:
-        logger.error(f"Błąd parsowania JSON z AI. Raw response: {response.text}")
-        return tekst_uzytkownika
-    except Exception as e:
-        logger.error(f"Krytyczny błąd API/Gemini: {e}")
-        return tekst_uzytkownika
 
 
 # --- Funkcja tworząca klawiaturę Inline ---
@@ -457,11 +418,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
              return
 
         wpis_usera = user_message.strip()
-        await update.message.reply_text(f"🔎 Szukam firmy pasującej do: '{wpis_usera}'...")
         
-        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY ---
-        firma = dopasuj_firme_ai(wpis_usera)
-        # -----------------------------------------
+        # --- UŻYCIE WBUDOWANEGO DOPASOWANIA PYTHONA ZAMIAST AI ---
+        firma = dopasuj_firme_python(wpis_usera)
+        # --------------------------------------------------------
 
         szereg_name = chat_data.get('wybrany_szereg', 'BŁĄD STANU')
         
@@ -571,7 +531,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            # Połączenie lokal + tekst usterki (bez analizy AI)
+            # Połączenie lokal + tekst usterki
             usterka_opis = f"{prefix_lokalu} - {usterka_opis_raw}"
             
             usterka_id = str(uuid.uuid4())
