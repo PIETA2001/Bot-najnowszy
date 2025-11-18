@@ -5,11 +5,11 @@ import io
 import uuid
 from datetime import datetime
 from dotenv import load_dotenv
-import difflib # Import dla dopasowywania ciągu
+import difflib 
 
-# --- Importy Bibliotek (Usuwamy Google Gemini) ---
-# Usunięto: import google.generativeai as genai
-# Usunięto: from google.generativeai.types import HarmCategory, HarmBlockThreshold
+# --- Importy Bibliotek ---
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import gspread
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -30,10 +30,10 @@ logger = logging.getLogger(__name__)
 # --- 2. Ładowanie Kluczy API ---
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-# Usunięto: GEMINI_API_KEY (już niepotrzebny)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
-if not TELEGRAM_TOKEN:
-    logger.critical("BŁĄD: Nie znaleziono tokenu TELEGRAM_TOKEN w pliku .env")
+if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
+    logger.critical("BŁĄD: Nie znaleziono tokenów (TELEGRAM_TOKEN lub GEMINI_API_KEY) w pliku .env")
     exit()
 
 # --- 3. Konfiguracja Google ---
@@ -58,8 +58,7 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "EL-ROM Sylwia Romanowska",
     "Complex Bruk Mateusz Oleksak",
     "Usługi Budowlane Michał Piskorz",
-    "PRIMA TYNK Janusz Pelc"
-    
+    "PRIMA TYNK Janusz Pelc"    
 ]
 
 # --- 3c. Dane do Przycisków ---
@@ -86,50 +85,6 @@ worksheet = None
 drive_service = None
 g_drive_main_folder_id = None
 g_drive_szeregi_folder_id = None
-
-# --- FUNKCJA WYSZUKUJĄCA FIRMĘ (ZAMIAST AI - STABILNY PYTHON) ---
-def dopasuj_firme_python(tekst_uzytkownika: str) -> str:
-    """
-    Używa dopasowania ciągu znaków (difflib) do znalezienia najlepiej pasującej firmy.
-    Minimalny próg dopasowania: 0.6 (60%).
-    """
-    search_term = tekst_uzytkownika.strip().upper()
-    
-    OFFICIAL_LIST = LISTA_FIRM_WYKONAWCZYCH 
-    
-    # Tworzenie mapowania czystej nazwy na oryginalną nazwę (usuwanie dużych spólek/znaków)
-    searchable_list = []
-    mapping = {}
-
-    for firm_name in OFFICIAL_LIST:
-        # Normalizacja: usunięcie sp. z o.o. i konwersja na duże litery dla lepszego porównania
-        clean_name = firm_name.upper().replace('SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ', '').strip()
-        searchable_list.append(clean_name)
-        mapping[clean_name] = firm_name # Mapowanie czystej nazwy na oryginalną
-
-    # 1. Użycie difflib.get_close_matches (n=1, cutoff=0.6)
-    matches = difflib.get_close_matches(
-        search_term,
-        searchable_list,
-        n=1,
-        cutoff=0.6 
-    )
-
-    if matches:
-        best_match_cleaned = matches[0]
-        # Zwracamy oryginalną nazwę z listy
-        final_firm = mapping.get(best_match_cleaned, matches[0])
-        logger.info(f"Python dopasował '{tekst_uzytkownika}' do '{final_firm}' (Found match)")
-        return final_firm
-    else:
-        # 2. Fallback: Jeśli dopasowanie jest słabe (poniżej 60%) lub brak, używamy surowego wpisu
-        result = f"INNA: {tekst_uzytkownika}"
-        logger.warning(f"Python nie znalazł dopasowania dla '{tekst_uzytkownika}', użyto fallback.")
-        return result
-
-# Zastępujemy starą nazwę funkcji dla czytelności w handlerach
-dopasuj_firme_ai = dopasuj_firme_python
-
 
 def get_google_creds():
     """Obsługuje logowanie OAuth 2.0 i przechowuje token."""
@@ -218,6 +173,115 @@ try:
 except Exception as e:
     logger.critical(f"BŁĄD KRYTYCZNY: Nie można połączyć z Google: {e}")
     exit()
+
+
+# ----------------------------------------------------
+# --- 4. KONFIGURACJA GEMINI (STRATEGIA "ID") ---
+# ----------------------------------------------------
+genai.configure(api_key=GEMINI_API_KEY)
+
+# Krótka instrukcja - AI ma tylko zwrócić numer.
+system_instruction_text = """
+Jesteś botem klasyfikującym. 
+Otrzymasz listę firm (ponumerowaną) i wpis użytkownika.
+Twoim zadaniem jest zwrócić TYLKO NUMER (ID) firmy, która najlepiej pasuje do wpisu.
+Jeśli nic nie pasuje, zwróć -1.
+Nie pisz żadnych słów, tylko cyfrę.
+"""
+
+model = genai.GenerativeModel(
+    model_name="gemini-2.5-flash",
+    generation_config={
+        "temperature": 0.0, # Zero kreatywności, czysta logika
+        "max_output_tokens": 10,
+        "response_mime_type": "text/plain",
+    },
+    safety_settings=[
+        {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+    ],
+    system_instruction=system_instruction_text
+)
+
+def dopasuj_firme_ai(tekst_uzytkownika: str) -> str:
+    """
+    Hybryda AI + Python.
+    1. Wysyła do AI ponumerowaną listę i prosi o ID (omija filtry tekstowe).
+    2. Jeśli AI zawiedzie, Python robi "smart search" (sprawdza czy tekst jest częścią nazwy).
+    """
+    
+    # 1. Budowanie listy dla AI: "0: Firma A\n1: Firma B..."
+    lista_indexed = "\n".join([f"{i}: {name}" for i, name in enumerate(LISTA_FIRM_WYKONAWCZYCH)])
+    
+    prompt = f"""
+    Lista firm:
+    {lista_indexed}
+    
+    Wpis użytkownika: "{tekst_uzytkownika}"
+    
+    ID pasującej firmy:
+    """
+
+    ai_success = False
+    wynik_firma = None
+
+    # --- PRÓBA AI ---
+    try:
+        response = model.generate_content(prompt)
+        
+        if response.candidates and response.candidates[0].finish_reason.value == 1:
+            ai_output = response.text.strip()
+            # Próbujemy wyciągnąć liczbę z odpowiedzi
+            if ai_output.isdigit() or (ai_output.startswith("-") and ai_output[1:].isdigit()):
+                idx = int(ai_output)
+                if 0 <= idx < len(LISTA_FIRM_WYKONAWCZYCH):
+                    wynik_firma = LISTA_FIRM_WYKONAWCZYCH[idx]
+                    ai_success = True
+                    logger.info(f"AI dopasowało ID {idx} -> {wynik_firma}")
+                elif idx == -1:
+                    logger.info("AI stwierdziło brak dopasowania (-1).")
+            else:
+                logger.warning(f"AI zwróciło coś dziwnego: '{ai_output}'")
+        else:
+            logger.warning("AI zablokowało odpowiedź lub błąd generowania.")
+            
+    except Exception as e:
+        logger.error(f"Błąd połączenia z AI: {e}")
+
+    if ai_success and wynik_firma:
+        return wynik_firma
+
+    # --- FALLBACK PYTHON (Gdy AI zawiedzie lub zwróci -1) ---
+    logger.info("Uruchamianie awaryjnego dopasowania Python (Smart substring)...")
+    search_term = tekst_uzytkownika.strip().upper()
+    
+    # 1. Sprawdzenie czy wpis zawiera się w nazwie (np. "IVAN" in "SIL GROUP IVAN...")
+    candidates = []
+    for firm in LISTA_FIRM_WYKONAWCZYCH:
+        clean_firm = firm.upper().replace("SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ", "")
+        if search_term in clean_firm:
+            candidates.append(firm)
+    
+    if len(candidates) == 1:
+        logger.info(f"Python Smart-Fallback znalazł: {candidates[0]}")
+        return candidates[0]
+    elif len(candidates) > 1:
+        # Jeśli pasuje do kilku, bierzemy najkrótszą (zazwyczaj najbardziej precyzyjną) lub pierwszą
+        logger.info(f"Python Smart-Fallback znalazł kilka, wybieram: {candidates[0]}")
+        return candidates[0]
+
+    # 2. Ostatnia deska ratunku: difflib (literówki)
+    matches = difflib.get_close_matches(search_term, [f.upper() for f in LISTA_FIRM_WYKONAWCZYCH], n=1, cutoff=0.5)
+    if matches:
+        # Znajdź oryginał
+        for firm in LISTA_FIRM_WYKONAWCZYCH:
+            if firm.upper() == matches[0]:
+                logger.info(f"Python Difflib znalazł: {firm}")
+                return firm
+
+    return f"INNA: {tekst_uzytkownika}"
 
 
 # --- Funkcja tworząca klawiaturę Inline ---
@@ -425,10 +489,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
              return
 
         wpis_usera = user_message.strip()
+        await update.message.reply_text(f"🔎 Szukam firmy pasującej do: '{wpis_usera}'...")
         
-        # --- UŻYCIE WBUDOWANEGO DOPASOWANIA PYTHONA ZAMIAST AI ---
-        firma = dopasuj_firme_python(wpis_usera)
-        # --------------------------------------------------------
+        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY ---
+        firma = dopasuj_firme_ai(wpis_usera)
+        # -----------------------------------------
 
         szereg_name = chat_data.get('wybrany_szereg', 'BŁĄD STANU')
         
