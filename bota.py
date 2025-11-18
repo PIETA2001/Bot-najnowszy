@@ -58,7 +58,8 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "EL-ROM Sylwia Romanowska",
     "Complex Bruk Mateusz Oleksak",
     "Usługi Budowlane Michał Piskorz",
-    "PRIMA TYNK Janusz Pelc"    
+    "PRIMA TYNK Janusz Pelc",
+    "Dachy płaskie hydroizolacje Grzegorz Madej"
 ]
 
 # --- 3c. Dane do Przycisków ---
@@ -937,3 +938,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
