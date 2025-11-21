@@ -317,26 +317,74 @@ def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = No
     return InlineKeyboardMarkup(keyboard)
 
 
-# --- 6. Funkcja do Zapisu w Arkuszu ---
+# -----------------------------------------------------------
+# --- 6a. KONFIGURACJA KOLUMN W ARKUSZU (NOWOŚĆ) ---
+# -----------------------------------------------------------
+# Zmień te litery, jeśli Twój arkusz ma inny układ!
+KOLUMNA_DATA = 'A'
+KOLUMNA_LOKAL = 'B'
+KOLUMNA_USTERKA = 'C'
+KOLUMNA_PODMIOT = 'D'
+KOLUMNA_ZDJECIE = 'E'
+
+# Kolumna, której używamy do znalezienia pierwszego wolnego wiersza.
+# Powinna to być kolumna, która ZAWSZE jest wypełniona (np. Data lub Lokal).
+# 1 = Kolumna A, 2 = Kolumna B, itd.
+NUMER_KOLUMNY_KLUCZOWEJ = 1  # Szukamy wolnego wiersza na podstawie kolumny A (Data)
+
+# --- 6. Funkcja do Zapisu w Arkuszu (POPRAWIONA) ---
 def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
-    """Zapisuje przeanalizowane dane w nowym wierszu Arkusza Google."""
+    """
+    Zapisuje dane w pierwszym WOLNYM wierszu, ignorując formatowanie,
+    i celuje w konkretne kolumny zdefiniowane w konfiguracji.
+    """
     try:
         data_str = data_telegram.strftime('%Y-%m-%d %H:%M:%S')
         
-        nowy_wiersz = [
-            data_str,
-            dane_json.get('numer_lokalu_budynku', 'BŁĄD'),
-            dane_json.get('rodzaj_usterki', 'BŁĄD'),
-            dane_json.get('podmiot_odpowiedzialny', 'BŁĄD'),
-            dane_json.get('link_do_zdjecia', '')
-        ]
+        # 1. Pobierz wszystkie wartości z kolumny kluczowej, aby znaleźć gdzie kończy się tekst
+        # Ignoruje puste, sformatowane wiersze na dole.
+        wartosci_w_kolumnie = worksheet.col_values(NUMER_KOLUMNY_KLUCZOWEJ)
         
-        worksheet.append_row(nowy_wiersz, value_input_option='USER_ENTERED')
-        logger.info(f"Dodano wiersz do arkusza: {nowy_wiersz}")
+        # Pierwszy wolny wiersz to liczba zajętych wierszy + 1
+        pierwszy_wolny_wiersz = len(wartosci_w_kolumnie) + 1
+        
+        logger.info(f"Znaleziono pierwszy wolny wiersz logiczny: {pierwszy_wolny_wiersz}")
+
+        # 2. Przygotuj dane do wysłania (batch_update)
+        # Dzięki temu wpisujemy dane w KONKRETNE komórki (np. C15, E15) niezależnie od ich kolejności
+        updates = [
+            {
+                'range': f'{KOLUMNA_DATA}{pierwszy_wolny_wiersz}',
+                'values': [[data_str]]
+            },
+            {
+                'range': f'{KOLUMNA_LOKAL}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('numer_lokalu_budynku', 'BŁĄD')]]
+            },
+            {
+                'range': f'{KOLUMNA_USTERKA}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('rodzaj_usterki', 'BŁĄD')]]
+            },
+            {
+                'range': f'{KOLUMNA_PODMIOT}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('podmiot_odpowiedzialny', 'BŁĄD')]]
+            },
+            {
+                'range': f'{KOLUMNA_ZDJECIE}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('link_do_zdjecia', '')]]
+            }
+        ]
+
+        # 3. Wyślij zmiany do arkusza jednym strzałem
+        worksheet.batch_update(updates, value_input_option='USER_ENTERED')
+        
+        logger.info(f"Pomyślnie zapisano dane w wierszu {pierwszy_wolny_wiersz}")
         return True
+
     except Exception as e:
         logger.error(f"Błąd podczas zapisu do Google Sheets: {e}")
         return False
+
 
 # --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE ---
 def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, tryb_odbioru='lokal'):
