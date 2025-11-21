@@ -40,11 +40,8 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 GOOGLE_CREDENTIALS_FILE = 'credentials.json'
 GOOGLE_TOKEN_FILE = 'token.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-
 GOOGLE_SHEET_NAME = 'Odbiory_Kolonia_Warszawska'
-WORKSHEET_NAME = 'Arkusz1'        # Arkusz do ZAPISU
-WORKSHEET_ARCHIVE_NAME = 'Archiwum' # Arkusz do ODCZYTU (Archiwum) - UPEWNIJ SIĘ ŻE ISTNIEJE!
-
+WORKSHEET_NAME = 'Arkusz1'
 G_DRIVE_MAIN_FOLDER_NAME = 'Lokale'
 G_DRIVE_SZEREGI_FOLDER_NAME = 'Szeregi'
 
@@ -80,6 +77,10 @@ DANE_SZEREGOW = {
     "Szereg 11": {"zakres": "15-19", "lokale": ["15/1", "15/2", "16/1", "16/2", "17/1", "17/2", "18/1", "18/2", "19/1", "19/2"]}
 }
 
+START_KEYBOARD = ReplyKeyboardMarkup(
+    [["NOWY ODBIÓR"]], resize_keyboard=True
+)
+
 gc = None
 worksheet = None
 drive_service = None
@@ -93,17 +94,21 @@ def get_google_creds():
     # --- SEKCJA DLA RAILWAY ---
     creds_json_string = os.getenv('GOOGLE_CREDENTIALS_JSON')
     if creds_json_string:
+        logger.info("Wykryto credentials w zmiennej środowiskowej. Zapisywanie do pliku...")
         try:
             with open(GOOGLE_CREDENTIALS_FILE, 'w') as f:
                 f.write(creds_json_string)
+            logger.info(f"Pomyślnie zapisano credentials w {GOOGLE_CREDENTIALS_FILE}")
         except Exception as e:
             logger.error(f"Nie można zapisać credentials ze zmiennej: {e}")
     
     token_json_string = os.getenv('GOOGLE_TOKEN_JSON')
     if token_json_string:
+        logger.info("Wykryto token w zmiennej środowiskowej. Zapisywanie do pliku...")
         try:
             with open(GOOGLE_TOKEN_FILE, 'w') as token:
                 token.write(token_json_string)
+            logger.info(f"Pomyślnie zapisano token w {GOOGLE_TOKEN_FILE}")
         except Exception as e:
             logger.error(f"Nie można zapisać tokenu ze zmiennej: {e}")
     # --- KONIEC SEKCJI ---
@@ -113,8 +118,10 @@ def get_google_creds():
     
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
+            logger.info("Token wygasł, odświeżanie...")
             creds.refresh(Request())
         else:
+            logger.info("Brak tokenu lub token nieprawidłowy. Uruchamianie przepływu autoryzacji...")
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_FILE, SCOPES)
                 creds = flow.run_local_server(port=0)
@@ -124,6 +131,7 @@ def get_google_creds():
 
         with open(GOOGLE_TOKEN_FILE, 'w') as token:
             token.write(creds.to_json())
+        logger.info(f"Pomyślnie zapisano/zaktualizowano token w {GOOGLE_TOKEN_FILE}")
     
     return creds
 
@@ -137,23 +145,30 @@ try:
     logger.info(f"Pomyślnie połączono z Arkuszem Google: {GOOGLE_SHEET_NAME}")
 
     drive_service = build('drive', 'v3', credentials=creds)
-    
+    logger.info("Pomyślnie połączono z Google Drive")
+
     def find_folder(folder_name):
+        logger.info(f"Szukanie folderu: '{folder_name}'...")
         response_folder = drive_service.files().list(
             q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=False",
             spaces='drive',
             fields='files(id, name)',
         ).execute()
+        
         files = response_folder.get('files', [])
         if not files:
+            logger.critical(f"BŁĄD KRYTYCZNY: Nie znaleziono folderu '{folder_name}' na Twoim 'Mój Dysk'!")
             return None
-        return files[0].get('id')
+        
+        folder_id = files[0].get('id')
+        logger.info(f"Pomyślnie znaleziono folder '{folder_name}' (ID: {folder_id})")
+        return folder_id
 
     g_drive_main_folder_id = find_folder(G_DRIVE_MAIN_FOLDER_NAME)
     g_drive_szeregi_folder_id = find_folder(G_DRIVE_SZEREGI_FOLDER_NAME)
 
     if not g_drive_main_folder_id:
-        logger.critical(f"Nie udało się znaleźć głównego folderu '{G_DRIVE_MAIN_FOLDER_NAME}'.")
+        logger.critical(f"Nie udało się znaleźć głównego folderu '{G_DRIVE_MAIN_FOLDER_NAME}'. Zamykanie.")
         exit()
 
 except Exception as e:
@@ -162,434 +177,553 @@ except Exception as e:
 
 
 # ----------------------------------------------------
-# --- 4. KONFIGURACJA GEMINI (Dopasowanie AI) ---
+# --- 4. KONFIGURACJA GEMINI (STRATEGIA "ID") ---
 # ----------------------------------------------------
 genai.configure(api_key=GEMINI_API_KEY)
 
+# Krótka instrukcja - AI ma tylko zwrócić numer.
 system_instruction_text = """
 Jesteś botem klasyfikującym. 
 Otrzymasz listę firm (ponumerowaną) i wpis użytkownika.
 Twoim zadaniem jest zwrócić TYLKO NUMER (ID) firmy, która najlepiej pasuje do wpisu.
 Jeśli nic nie pasuje, zwróć -1.
+Nie pisz żadnych słów, tylko cyfrę.
 """
 
 model = genai.GenerativeModel(
     model_name="gemini-2.5-flash",
-    generation_config={"temperature": 0.0, "max_output_tokens": 10, "response_mime_type": "text/plain"},
+    generation_config={
+        "temperature": 0.0, # Zero kreatywności, czysta logika
+        "max_output_tokens": 10,
+        "response_mime_type": "text/plain",
+    },
     safety_settings=[
         {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
         {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+        {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
     ],
     system_instruction=system_instruction_text
 )
 
 def dopasuj_firme_ai(tekst_uzytkownika: str) -> str:
-    """Logika AI + Python do wyszukiwania firmy."""
+    """
+    Hybryda AI + Python.
+    1. Wysyła do AI ponumerowaną listę i prosi o ID (omija filtry tekstowe).
+    2. Jeśli AI zawiedzie, Python robi "smart search" (sprawdza czy tekst jest częścią nazwy).
+    """
+    
+    # 1. Budowanie listy dla AI: "0: Firma A\n1: Firma B..."
     lista_indexed = "\n".join([f"{i}: {name}" for i, name in enumerate(LISTA_FIRM_WYKONAWCZYCH)])
-    prompt = f"Lista firm:\n{lista_indexed}\nWpis użytkownika: \"{tekst_uzytkownika}\"\nID pasującej firmy:"
+    
+    prompt = f"""
+    Lista firm:
+    {lista_indexed}
+    
+    Wpis użytkownika: "{tekst_uzytkownika}"
+    
+    ID pasującej firmy:
+    """
 
     ai_success = False
     wynik_firma = None
 
+    # --- PRÓBA AI ---
     try:
         response = model.generate_content(prompt)
+        
         if response.candidates and response.candidates[0].finish_reason.value == 1:
             ai_output = response.text.strip()
+            # Próbujemy wyciągnąć liczbę z odpowiedzi
             if ai_output.isdigit() or (ai_output.startswith("-") and ai_output[1:].isdigit()):
                 idx = int(ai_output)
                 if 0 <= idx < len(LISTA_FIRM_WYKONAWCZYCH):
                     wynik_firma = LISTA_FIRM_WYKONAWCZYCH[idx]
                     ai_success = True
+                    logger.info(f"AI dopasowało ID {idx} -> {wynik_firma}")
+                elif idx == -1:
+                    logger.info("AI stwierdziło brak dopasowania (-1).")
+            else:
+                logger.warning(f"AI zwróciło coś dziwnego: '{ai_output}'")
+        else:
+            logger.warning("AI zablokowało odpowiedź lub błąd generowania.")
+            
     except Exception as e:
         logger.error(f"Błąd połączenia z AI: {e}")
 
     if ai_success and wynik_firma:
         return wynik_firma
 
-    # Fallback Python
+    # --- FALLBACK PYTHON (Gdy AI zawiedzie lub zwróci -1) ---
+    logger.info("Uruchamianie awaryjnego dopasowania Python (Smart substring)...")
     search_term = tekst_uzytkownika.strip().upper()
+    
+    # 1. Sprawdzenie czy wpis zawiera się w nazwie (np. "IVAN" in "SIL GROUP IVAN...")
     candidates = []
     for firm in LISTA_FIRM_WYKONAWCZYCH:
         clean_firm = firm.upper().replace("SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ", "")
         if search_term in clean_firm:
             candidates.append(firm)
     
-    if len(candidates) >= 1:
+    if len(candidates) == 1:
+        logger.info(f"Python Smart-Fallback znalazł: {candidates[0]}")
+        return candidates[0]
+    elif len(candidates) > 1:
+        # Jeśli pasuje do kilku, bierzemy najkrótszą (zazwyczaj najbardziej precyzyjną) lub pierwszą
+        logger.info(f"Python Smart-Fallback znalazł kilka, wybieram: {candidates[0]}")
         return candidates[0]
 
+    # 2. Ostatnia deska ratunku: difflib (literówki)
     matches = difflib.get_close_matches(search_term, [f.upper() for f in LISTA_FIRM_WYKONAWCZYCH], n=1, cutoff=0.5)
     if matches:
+        # Znajdź oryginał
         for firm in LISTA_FIRM_WYKONAWCZYCH:
             if firm.upper() == matches[0]:
+                logger.info(f"Python Difflib znalazł: {firm}")
                 return firm
 
     return f"INNA: {tekst_uzytkownika}"
 
-# --- 5a. FUNKCJA MENU GŁÓWNEGO (Zależna od TRYBU) ---
-def get_main_menu_keyboard(mode='add'):
-    """Generuje klawiaturę główną w zależności od trybu (DODAWANIE / ARCHIWUM)."""
-    if mode == 'archive':
-        # Tryb CZYTANIA (Archiwum) - Kolor pomarańczowy
-        return ReplyKeyboardMarkup([
-            ["🔍 PRZEGLĄDAJ LOKALE"],
-            ["🔄 ZMIEŃ TRYB: 🟢 DODAWANIE"]
-        ], resize_keyboard=True)
-    else:
-        # Tryb DOMYŚLNY (Dodawanie) - Kolor zielony
-        return ReplyKeyboardMarkup([
-            ["📝 NOWY ODBIÓR"],
-            ["🔄 ZMIEŃ TRYB: 🟠 ARCHIWUM"]
-        ], resize_keyboard=True)
 
 # --- Funkcja tworząca klawiaturę Inline ---
 def get_inline_keyboard(usterka_id=None, context: ContextTypes.DEFAULT_TYPE = None):
     """Tworzy i zwraca dynamiczną klawiaturę inline na podstawie stanu sesji."""
     keyboard = []
-    chat_data = context.chat_data if context else {}
     
-    lista_lokali = chat_data.get('lista_lokali_szeregu')
-    if lista_lokali:
-        row = []
-        for lokal_name in lista_lokali:
-            row.append(InlineKeyboardButton(lokal_name, callback_data=f"setlokal_{lokal_name}"))
-            if len(row) >= 4:
+    if context:
+        chat_data = context.chat_data
+        
+        lista_lokali = chat_data.get('lista_lokali_szeregu')
+        if lista_lokali:
+            row = []
+            for lokal_name in lista_lokali:
+                row.append(InlineKeyboardButton(lokal_name, callback_data=f"setlokal_{lokal_name}"))
+                if len(row) >= 4:
+                    keyboard.append(row)
+                    row = []
+            if row:
                 keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        
-        # Jeśli jesteśmy w trybie ARCHIWUM, napis jest inny
-        if chat_data.get('app_mode') == 'archive':
-             keyboard.append([InlineKeyboardButton("--- Kliknij lokal, by sprawdzić ---", callback_data="noop")])
-        else:
-             keyboard.append([InlineKeyboardButton("--- Wybierz lokal powyżej ---", callback_data="noop")])
+            keyboard.append([InlineKeyboardButton("--- Wybierz lokal powyżej ---", callback_data="noop")])
 
-    # Przyciski funkcyjne tylko w trybie DODAWANIA
-    if chat_data.get('app_mode') != 'archive':
-        if usterka_id:
-            keyboard.append([
-                InlineKeyboardButton(f"Cofnij TĘ usterkę ↩️", callback_data=f'cofnij_{usterka_id}')
-            ])
-        
+    if usterka_id:
         keyboard.append([
-            InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='koniec_odbioru')
+            InlineKeyboardButton(f"Cofnij TĘ usterkę ↩️", callback_data=f'cofnij_{usterka_id}')
         ])
-    else:
-        # W trybie archiwum przycisk powrotu
-        keyboard.append([InlineKeyboardButton("<< Wróć do menu", callback_data="start_menu")])
+    
+    keyboard.append([
+        InlineKeyboardButton("Zakończ Cały Odbiór 🏁", callback_data='koniec_odbioru')
+    ])
     
     return InlineKeyboardMarkup(keyboard)
 
 
 # -----------------------------------------------------------
-# --- 6. OBSŁUGA ARKUSZA (ZAPIS i ODCZYT) ---
+# --- 6a. KONFIGURACJA KOLUMN W ARKUSZU (NOWOŚĆ) ---
 # -----------------------------------------------------------
+# Zmień te litery, jeśli Twój arkusz ma inny układ!
 KOLUMNA_DATA = 'A'
 KOLUMNA_LOKAL = 'B'
 KOLUMNA_USTERKA = 'C'
 KOLUMNA_PODMIOT = 'D'
 KOLUMNA_ZDJECIE = 'E'
-NUMER_KOLUMNY_KLUCZOWEJ = 1 
 
+# Kolumna, której używamy do znalezienia pierwszego wolnego wiersza.
+# Powinna to być kolumna, która ZAWSZE jest wypełniona (np. Data lub Lokal).
+# 1 = Kolumna A, 2 = Kolumna B, itd.
+NUMER_KOLUMNY_KLUCZOWEJ = 1  # Szukamy wolnego wiersza na podstawie kolumny A (Data)
+
+# --- 6. Funkcja do Zapisu w Arkuszu (POPRAWIONA) ---
 def zapisz_w_arkuszu(dane_json: dict, data_telegram: datetime) -> bool:
-    """Zapisuje dane w arkuszu roboczym."""
+    """
+    Zapisuje dane w pierwszym WOLNYM wierszu, ignorując formatowanie,
+    i celuje w konkretne kolumny zdefiniowane w konfiguracji.
+    """
     try:
         data_str = data_telegram.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 1. Pobierz wszystkie wartości z kolumny kluczowej, aby znaleźć gdzie kończy się tekst
+        # Ignoruje puste, sformatowane wiersze na dole.
         wartosci_w_kolumnie = worksheet.col_values(NUMER_KOLUMNY_KLUCZOWEJ)
+        
+        # Pierwszy wolny wiersz to liczba zajętych wierszy + 1
         pierwszy_wolny_wiersz = len(wartosci_w_kolumnie) + 1
         
+        logger.info(f"Znaleziono pierwszy wolny wiersz logiczny: {pierwszy_wolny_wiersz}")
+
+        # 2. Przygotuj dane do wysłania (batch_update)
+        # Dzięki temu wpisujemy dane w KONKRETNE komórki (np. C15, E15) niezależnie od ich kolejności
         updates = [
-            {'range': f'{KOLUMNA_DATA}{pierwszy_wolny_wiersz}', 'values': [[data_str]]},
-            {'range': f'{KOLUMNA_LOKAL}{pierwszy_wolny_wiersz}', 'values': [[dane_json.get('numer_lokalu_budynku', 'BŁĄD')]]},
-            {'range': f'{KOLUMNA_USTERKA}{pierwszy_wolny_wiersz}', 'values': [[dane_json.get('rodzaj_usterki', 'BŁĄD')]]},
-            {'range': f'{KOLUMNA_PODMIOT}{pierwszy_wolny_wiersz}', 'values': [[dane_json.get('podmiot_odpowiedzialny', 'BŁĄD')]]},
-            {'range': f'{KOLUMNA_ZDJECIE}{pierwszy_wolny_wiersz}', 'values': [[dane_json.get('link_do_zdjecia', '')]]}
+            {
+                'range': f'{KOLUMNA_DATA}{pierwszy_wolny_wiersz}',
+                'values': [[data_str]]
+            },
+            {
+                'range': f'{KOLUMNA_LOKAL}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('numer_lokalu_budynku', 'BŁĄD')]]
+            },
+            {
+                'range': f'{KOLUMNA_USTERKA}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('rodzaj_usterki', 'BŁĄD')]]
+            },
+            {
+                'range': f'{KOLUMNA_PODMIOT}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('podmiot_odpowiedzialny', 'BŁĄD')]]
+            },
+            {
+                'range': f'{KOLUMNA_ZDJECIE}{pierwszy_wolny_wiersz}',
+                'values': [[dane_json.get('link_do_zdjecia', '')]]
+            }
         ]
+
+        # 3. Wyślij zmiany do arkusza jednym strzałem
         worksheet.batch_update(updates, value_input_option='USER_ENTERED')
+        
+        logger.info(f"Pomyślnie zapisano dane w wierszu {pierwszy_wolny_wiersz}")
         return True
+
     except Exception as e:
         logger.error(f"Błąd podczas zapisu do Google Sheets: {e}")
         return False
 
-def pobierz_usterki_z_archiwum(numer_lokalu: str) -> str:
-    """Pobiera usterki dla danego lokalu z arkusza Archiwum."""
-    try:
-        # Otwieramy arkusz Archiwum
-        try:
-            archive_sheet = spreadsheet.worksheet(WORKSHEET_ARCHIVE_NAME)
-        except gspread.WorksheetNotFound:
-            return f"❌ BŁĄD: Nie znaleziono arkusza o nazwie '{WORKSHEET_ARCHIVE_NAME}'."
-
-        # Pobieramy wszystkie dane 
-        rows = archive_sheet.get_all_values()
-        
-        znalezione_usterki = []
-        
-        # Iterujemy (pomijamy ewentualny nagłówek w wierszu 0, jeśli dane zaczynają się od 1)
-        for index, row in enumerate(rows):
-            if index == 0: continue # Zakładamy nagłówek w 1 wierszu
-
-            # Sprawdzamy czy wiersz ma wystarczająco kolumn (index 1 to kolumna B - Lokal)
-            # Kolumny: 0=Data, 1=Lokal, 2=Usterka, 3=Podmiot, 4=Zdjęcie
-            if len(row) > 1 and row[1] == numer_lokalu:
-                data_wpisu = row[0] if len(row) > 0 else "-"
-                usterka = row[2] if len(row) > 2 else "Brak opisu"
-                podmiot = row[3] if len(row) > 3 else "-"
-                zdjecie = row[4] if len(row) > 4 else ""
-                
-                wpis = f"🔹 <b>{usterka}</b>\n   👷 {podmiot}\n   📅 {data_wpisu}"
-                if zdjecie:
-                    wpis += f"\n   📷 <a href='{zdjecie}'>Zobacz zdjęcie</a>"
-                
-                znalezione_usterki.append(wpis)
-                
-        if not znalezione_usterki:
-            return f"📂 Brak usterek w Archiwum dla lokalu: <b>{numer_lokalu}</b>"
-            
-        naglowek = f"📂 <b>ARCHIWUM: {numer_lokalu}</b> (Znaleziono: {len(znalezione_usterki)})\n" + "-"*25 + "\n\n"
-        return naglowek + "\n\n".join(znalezione_usterki)
-
-    except Exception as e:
-        logger.error(f"Błąd odczytu z archiwum: {e}")
-        return "❌ Wystąpił błąd podczas pobierania danych z Archiwum."
-
 
 # --- FUNKCJA WYSYŁANIA NA GOOGLE DRIVE ---
 def upload_photo_to_drive(file_bytes, target_name, usterka_name, podmiot_name, tryb_odbioru='lokal'):
+    """Wyszukuje podfolder (lokalu lub szeregu) i wysyła do niego zdjęcie."""
     global drive_service, g_drive_main_folder_id, G_DRIVE_MAIN_FOLDER_NAME
+    
     try:
         parent_folder_id = g_drive_main_folder_id
+        
         q_str = f"name='{target_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=False"
-        response = drive_service.files().list(q=q_str, spaces='drive', fields='files(id, name)').execute()
+        
+        response = drive_service.files().list(
+            q=q_str,
+            spaces='drive',
+            fields='files(id, name)',
+        ).execute()
+        
         target_folder = response.get('files', [])
 
         if not target_folder:
-            folder_metadata = {'name': target_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_folder_id]}
-            created_folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
-            target_folder_id = created_folder.get('id')
+            logger.warning(f"Nie znaleziono folderu '{target_name}'. Tworzenie nowego...")
+            try:
+                folder_metadata = {
+                    'name': target_name,
+                    'mimeType': 'application/vnd.google-apps.folder',
+                    'parents': [parent_folder_id]
+                }
+                created_folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+                target_folder_id = created_folder.get('id')
+                logger.info(f"Pomyślnie utworzono folder '{target_name}' (ID: {target_folder_id})")
+            except Exception as e:
+                logger.error(f"KRYTYCZNY BŁĄD: Nie można utworzyć folderu na Drive: {e}")
+                return False, f"Błąd tworzenia folderu na Drive: {e}", None
         else:
             target_folder_id = target_folder[0].get('id')
         
         file_name = f"{usterka_name} - {podmiot_name}.jpg"
-        file_metadata = {'name': file_name, 'parents': [target_folder_id]}
+        file_metadata = {
+            'name': file_name,
+            'parents': [target_folder_id]
+        }
         
         file_bytes.seek(0)
         media = MediaIoBaseUpload(file_bytes, mimetype='image/jpeg', resumable=True)
-        file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         
-        return True, file_name, file.get('id')
+        file = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id',
+        ).execute()
+        
+        file_id = file.get('id')
+        logger.info(f"Pomyślnie wysłano plik '{file_name}' do folderu '{target_name}' (ID: {file_id})")
+        return True, file_name, file_id
+    
     except Exception as e:
-        logger.error(f"Błąd Drive: {e}")
+        logger.error(f"Błąd podczas wysyłania na Google Drive: {e}")
         return False, str(e), None
 
+
+# --- Funkcja do usuwania pliku z Google Drive ---
 def delete_file_from_drive(file_id):
+    """Usuwa plik z Google Drive na podstawie jego ID."""
+    global drive_service
+    if not file_id:
+        logger.warning("Próba usunięcia pliku, ale brak file_id.")
+        return False, "Brak ID pliku"
+        
     try:
         drive_service.files().delete(fileId=file_id).execute()
+        logger.info(f"Pomyślnie usunięto plik z Drive (ID: {file_id})")
         return True, None
     except Exception as e:
+        logger.error(f"Błąd podczas usuwania pliku {file_id} z Drive: {e}")
         return False, str(e)
 
 
-# --- Funkcje pomocnicze klawiatury ---
+# --- 6b. Funkcje do budowania klawiatur dynamicznych ---
+
 def build_szereg_keyboard():
+    """Tworzy klawiaturę wyboru Szeregu (z ZAKRESEM)."""
     keyboard = []
     row = []
     sorted_keys = sorted(DANE_SZEREGOW.keys(), key=lambda x: int(x.split(' ')[1]))
+    
     for szereg_name in sorted_keys:
         dane = DANE_SZEREGOW[szereg_name]
-        button_text = f"{szereg_name} ({dane['zakres']})"
+        zakres = dane['zakres']
+        button_text = f"{szereg_name} ({zakres})"
+        
         row.append(InlineKeyboardButton(button_text, callback_data=f"szereg_{szereg_name}"))
         if len(row) >= 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
+    
     keyboard.append([InlineKeyboardButton("<< Anuluj", callback_data="start_menu")])
     return InlineKeyboardMarkup(keyboard)
 
 
 # --- Handler komendy /start ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Obsługuje komendę /start, pokazując klawiaturę główną."""
     chat_data = context.chat_data
     
-    # Domyślny tryb to 'add' (dodawanie)
-    if 'app_mode' not in chat_data:
-        chat_data['app_mode'] = 'add'
-    
-    # Jeśli w trakcie odbioru (tylko w trybie add), ostrzeżenie
-    if chat_data.get('odbiur_aktywny') and chat_data.get('app_mode') == 'add':
+    if chat_data.get('odbiur_aktywny'):
         await update.message.reply_text(
             "Odbiór jest już w toku. Zakończ go, aby rozpocząć nowy.",
             reply_markup=get_inline_keyboard(usterka_id=None, context=context)
         )
     else:
-        # Jeśli nie ma aktywnego odbioru, czyścimy zbędne dane (ale nie tryb)
-        mode = chat_data['app_mode']
-        chat_data.clear()
-        chat_data['app_mode'] = mode
-        
-        msg = "Witaj! Wybierz działanie z menu poniżej."
-        await update.message.reply_text(msg, reply_markup=get_main_menu_keyboard(mode))
+        chat_data.clear() 
+        await update.message.reply_text(
+            "Witaj! Bot jest gotowy.\nUżyj przycisku 'NOWY ODBIÓR' na klawiaturze, aby rozpocząć.",
+            reply_markup=START_KEYBOARD
+        )
 
 
 # --- 7. Główny Handler (serce bota) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Przechwytuje wiadomość, sprawdza stan sesji i decyduje co robić."""
+    
     if not update.message or (not update.message.text and not update.message.caption):
+         logger.warning("Otrzymano pustą wiadomość (np. naklejkę). Ignorowanie.")
          return
 
     user_message = update.message.text
     chat_data = context.chat_data
-    
-    # Inicjalizacja trybu
-    if 'app_mode' not in chat_data:
-        chat_data['app_mode'] = 'add'
 
-    # --- OBSŁUGA ZMIANY TRYBU ---
-    if user_message == "🔄 ZMIEŃ TRYB: 🟢 DODAWANIE":
-        chat_data['app_mode'] = 'archive'
-        await update.message.reply_text(
-            "🟠 Przełączono w tryb: ARCHIWUM (Tylko odczyt).",
-            reply_markup=get_main_menu_keyboard('archive')
-        )
-        return
-
-    if user_message == "🔄 ZMIEŃ TRYB: 🟠 ARCHIWUM":
-        chat_data['app_mode'] = 'add'
-        await update.message.reply_text(
-            "🟢 Przełączono w tryb: DODAWANIE (Zapis usterek).",
-            reply_markup=get_main_menu_keyboard('add')
-        )
-        return
-
-    # --- SCENARIUSZ 0: START (Zależnie od nazwy przycisku) ---
-    if user_message in ["📝 NOWY ODBIÓR", "🔍 PRZEGLĄDAJ LOKALE", "NOWY ODBIÓR"]:
-        # Czyścimy stare dane sesji, ale zachowujemy tryb
-        current_mode = chat_data['app_mode']
-        # Reset
-        chat_data.clear()
-        chat_data['app_mode'] = current_mode
-        
-        keyboard = build_szereg_keyboard()
-        tekst_powitalny = "Tryb: 📝 NOWY ODBIÓR" if current_mode == 'add' else "Tryb: 🔍 PRZEGLĄDANIE ARCHIWUM"
-        
-        await update.message.reply_text(
-            f"{tekst_powitalny}.\nWybierz Szereg:",
-            reply_markup=keyboard
-        )
-        return
-
-    # --- LOGIKA TYLKO DLA TRYBU DODAWANIA (add) ---
-    if chat_data.get('app_mode') == 'add':
-        
-        # STAN: Oczekiwanie na firmę
-        if chat_data.get('state') == 'AWAITING_FIRMA_SZEREG':
-            if not user_message:
-                 await update.message.reply_text("Oczekuję na nazwę firmy...")
-                 return
-
-            wpis_usera = user_message.strip()
-            await update.message.reply_text(f"🔎 Szukam firmy pasującej do: '{wpis_usera}'...")
-            firma = dopasuj_firme_ai(wpis_usera)
-            szereg_name = chat_data.get('wybrany_szereg', 'BŁĄD STANU')
-            
-            if szereg_name == 'BŁĄD STANU':
-                await update.message.reply_text("Wystąpił błąd stanu. Spróbuj ponownie od /start")
-                chat_data.clear()
-                return
-            
-            target_name = szereg_name.upper().strip()
-            
-            chat_data['odbiur_aktywny'] = True
-            chat_data['odbiur_identyfikator'] = target_name 
-            chat_data['odbiur_target_nazwa_do_zdjec'] = None
-            chat_data['tryb_odbioru'] = "szereg"
-            chat_data['odbiur_podmiot'] = firma
-            chat_data['odbiur_wpisy'] = []
-            chat_data['state'] = None
-            
-            chat_data['lista_lokali_szeregu'] = DANE_SZEREGOW[szereg_name].get("lokale", [])
-            chat_data['biezacy_lokal_w_szeregu'] = None 
-
-            await update.message.reply_text("Rozpoczynam odbiór...", reply_markup=ReplyKeyboardRemove())
-            
+    # --- SCENARIUSZ 0: Użytkownik klika "NOWY ODBIÓR" ---
+    if user_message == "NOWY ODBIÓR":
+        if chat_data.get('odbiur_aktywny'):
             await update.message.reply_text(
-                f"✅ Rozpoczęto odbiór dla: <b>CAŁY {target_name}</b>\n"
-                f"Wykonawca: <b>{firma}</b>\n\n"
-                f"Teraz <b>koniecznie wybierz lokal z przycisków poniżej</b> i wpisuj usterki.\n",
-                reply_markup=get_inline_keyboard(usterka_id=None, context=context),
-                parse_mode='HTML'
+                "Odbiór jest już w toku. Zakończ go, aby rozpocząć nowy.",
+                reply_markup=get_inline_keyboard(usterka_id=None, context=context)
             )
+        else:
+            chat_data.clear()
+            keyboard = build_szereg_keyboard()
+            await update.message.reply_text(
+                "Tryb: Nowy Odbiór.\nWybierz, który szereg chcesz odbierać:",
+                reply_markup=keyboard
+            )
+        return
+
+    # --- STAN: Oczekiwanie na firmę (po wybraniu szeregu) ---
+    if chat_data.get('state') == 'AWAITING_FIRMA_SZEREG':
+        if not user_message:
+             await update.message.reply_text("Oczekuję na nazwę firmy...")
+             return
+
+        wpis_usera = user_message.strip()
+        await update.message.reply_text(f"🔎 Szukam firmy pasującej do: '{wpis_usera}'...")
+        
+        # --- WYWOŁANIE AI DO DOPASOWANIA FIRMY ---
+        firma = dopasuj_firme_ai(wpis_usera)
+        # -----------------------------------------
+
+        szereg_name = chat_data.get('wybrany_szereg', 'BŁĄD STANU')
+        
+        if szereg_name == 'BŁĄD STANU':
+            await update.message.reply_text("Wystąpił błąd stanu. Spróbuj ponownie od /start", reply_markup=START_KEYBOARD)
+            chat_data.clear()
+            return
+        
+        target_name = szereg_name.upper().strip()
+        
+        chat_data['odbiur_aktywny'] = True
+        chat_data['odbiur_identyfikator'] = target_name 
+        chat_data['odbiur_target_nazwa_do_zdjec'] = None
+        chat_data['tryb_odbioru'] = "szereg"
+        chat_data['odbiur_podmiot'] = firma
+        chat_data['odbiur_wpisy'] = []
+        chat_data['state'] = None
+        
+        chat_data['lista_lokali_szeregu'] = DANE_SZEREGOW[szereg_name].get("lokale", [])
+        chat_data['biezacy_lokal_w_szeregu'] = None 
+
+        await update.message.reply_text("Rozpoczynam odbiór...", reply_markup=ReplyKeyboardRemove())
+        
+        await update.message.reply_text(f"✅ Rozpoczęto odbiór dla: <b>CAŁY {target_name}</b>\n"
+                                        f"Wykonawca: <b>{firma}</b>\n\n"
+                                        f"Teraz <b>koniecznie wybierz lokal z przycisków poniżej</b> i wpisuj usterki.\n",
+                                        reply_markup=get_inline_keyboard(usterka_id=None, context=context),
+                                        parse_mode='HTML')
+        return
+
+    # --- Reszta logiki ---
+    if not user_message:
+        if update.message.caption:
+            logger.info("Wiadomość tekstowa jest pusta, ale jest caption. Przekazuję do handle_photo.")
+            return
+        else:
+            logger.warning("Otrzymano wiadomość bez tekstu i bez caption. Ignorowanie.")
             return
 
-        # --- Obsługa wpisywania usterek ---
-        # (Tylko jeśli nie jest to komenda zmiany trybu, która już obsłużyliśmy wyżej)
-        if user_message and not user_message.startswith("🔄"):
-            message_time = update.message.date
+    message_time = update.message.date
 
-            # Odbiór aktywny - usterka tekstowa
+    try:
+        # --- LOGIKA SESJI ODBIORU ---
+
+        # SCENARIUSZ 1: Użytkownik KOŃCZY odbiór (Fallback tekstowy)
+        if user_message.lower().strip() == 'koniec odbioru':
             if chat_data.get('odbiur_aktywny'):
-                logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej.")
-                usterka_opis_raw = user_message.strip()
-                prefix_lokalu = chat_data.get('biezacy_lokal_w_szeregu')
+                identyfikator_odbioru = chat_data.get('odbiur_identyfikator', 'Brak ID Odbioru')
+                podmiot = chat_data.get('odbiur_podmiot')
+                wpisy_lista = chat_data.get('odbiur_wpisy', [])
                 
-                if not prefix_lokalu:
-                    await update.message.reply_text(
-                        "❌ BŁĄD: Nie wybrano lokalu.\nProszę, <b>wybierz lokal z przycisków poniżej</b>.",
-                        reply_markup=get_inline_keyboard(usterka_id=None, context=context),
-                        parse_mode='HTML'
-                    )
-                    return
+                if not wpisy_lista:
+                    await update.message.reply_text(f"Zakończono odbiór dla {identyfikator_odbioru}. Nie dodano żadnych usterek.",
+                                                    reply_markup=START_KEYBOARD)
+                else:
+                    logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla {identyfikator_odbioru}...")
+                    licznik_zapisanych = 0
+                    
+                    for wpis in wpisy_lista:
+                        opis_caly = wpis.get('opis', 'BŁĄD WPISU')
+                        
+                        lokal_dla_wpisu = identyfikator_odbioru 
+                        usterka_dla_wpisu = opis_caly
 
-                usterka_opis = f"{prefix_lokalu} - {usterka_opis_raw}"
-                usterka_id = str(uuid.uuid4())
-                nowy_wpis = {'id': usterka_id, 'typ': 'tekst', 'opis': usterka_opis}
-                chat_data['odbiur_wpisy'].append(nowy_wpis)
+                        if ' - ' in opis_caly:
+                            parts = opis_caly.split(' - ', 1)
+                            if len(parts) == 2:
+                                lokal_dla_wpisu = parts[0]
+                                usterka_dla_wpisu = parts[1]
+                        
+                        dane_json = {
+                            "numer_lokalu_budynku": lokal_dla_wpisu,
+                            "rodzaj_usterki": usterka_dla_wpisu,
+                            "podmiot_odpowiedzialny": podmiot,
+                            "link_do_zdjecia": ""
+                        }
+                        file_id_ze_zdjecia = wpis.get('file_id')
+                        if file_id_ze_zdjecia:
+                            link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
+                            dane_json['link_do_zdjecia'] = link_zdjecia
+                        
+                        if zapisz_w_arkuszu(dane_json, message_time):
+                            licznik_zapisanych += 1
+                    
+                    await update.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla {identyfikator_odbioru}.",
+                                                    reply_markup=START_KEYBOARD)
                 
+                chat_data.clear()
+            else:
+                await update.message.reply_text("Żaden odbiór nie jest aktywny.",
+                                                reply_markup=START_KEYBOARD)
+            return
+
+        # SCENARIUSZ 3: Odbiór jest AKTYWNY, a to jest usterka TEKSTOWA
+        if chat_data.get('odbiur_aktywny'):
+            logger.info(f"Odbiór aktywny. Zapisywanie usterki tekstowej: '{user_message}'")
+            
+            usterka_opis_raw = user_message.strip()
+            prefix_lokalu = chat_data.get('biezacy_lokal_w_szeregu')
+            
+            if not prefix_lokalu:
                 await update.message.reply_text(
-                    f"➕ Dodano: <b>{usterka_opis}</b>\n(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
-                    reply_markup=get_inline_keyboard(usterka_id=usterka_id, context=context),
+                    "❌ BŁĄD: Nie wybrano lokalu.\n\n"
+                    "Proszę, <b>wybierz lokal z przycisków poniżej</b> i wpisz usterkę ponownie.",
+                    reply_markup=get_inline_keyboard(usterka_id=None, context=context),
                     parse_mode='HTML'
                 )
                 return
-    
-    # Jeśli tryb Archive i ktoś coś pisze (ignorujemy lub podpowiadamy)
-    if chat_data.get('app_mode') == 'archive' and user_message and not user_message.startswith("🔄"):
-         await update.message.reply_text(
-             "Jesteś w trybie ARCHIWUM (tylko odczyt).\nUżyj przycisków, aby przeglądać lokale lub zmień tryb.",
-             reply_markup=get_main_menu_keyboard('archive')
-         )
+
+            # Połączenie lokal + tekst usterki
+            usterka_opis = f"{prefix_lokalu} - {usterka_opis_raw}"
+            
+            usterka_id = str(uuid.uuid4())
+            nowy_wpis = {
+                'id': usterka_id,
+                'typ': 'tekst',
+                'opis': usterka_opis
+            }
+            chat_data['odbiur_wpisy'].append(nowy_wpis)
+            
+            await update.message.reply_text(f"➕ Dodano: <b>{usterka_opis}</b>\n"
+                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id, context=context),
+                                            parse_mode='HTML')
+            return
+
+    except Exception as session_err:
+        logger.error(f"Wystąpił nieoczekiwany błąd w logice sesji: {session_err}")
+        await update.message.reply_text(f"❌ Wystąpił krytyczny błąd: {session_err}", reply_markup=START_KEYBOARD)
+        return
+
+    # --- FALLBACK ---
+    if not chat_data.get('odbiur_aktywny'):
+        logger.warning(f"Otrzymano nieobsługiwaną wiadomość poza sesją: {user_message}")
+        await update.message.reply_text(
+            "Nieprawidłowa komenda. Aby rozpocząć, naciśnij przycisk 'NOWY ODBIÓR'.",
+            reply_markup=START_KEYBOARD
+        )
 
 
 # --- 7b. HANDLER DLA ZDJĘĆ ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Przechwytuje zdjęcie W TRAKCIE aktywnej sesji odbioru."""
     chat_data = context.chat_data
     
-    # Zabezpieczenie: Zdjęcia tylko w trybie ADD i przy aktywnym odbiorze
-    if chat_data.get('app_mode') != 'add':
-        await update.message.reply_text("Przełącz się w tryb DODAWANIA, aby wysyłać zdjęcia.", reply_markup=get_main_menu_keyboard('archive'))
-        return
-
     if not chat_data.get('odbiur_aktywny'):
-        await update.message.reply_text("Wyślij zdjęcie *po* rozpoczęciu odbioru.", reply_markup=get_main_menu_keyboard('add'))
+        await update.message.reply_text("Wyślij zdjęcie *po* rozpoczęciu odbioru. Teraz ta fotka zostanie zignorowana.",
+                                        reply_markup=START_KEYBOARD)
         return
 
     usterka_opis_raw = update.message.caption
     if not usterka_opis_raw:
-        await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!", reply_markup=get_inline_keyboard(usterka_id=None, context=context))
+        await update.message.reply_text("❌ Zdjęcie musi mieć opis (usterkę)!",
+                                        reply_markup=get_inline_keyboard(usterka_id=None, context=context))
         return
 
     podmiot = chat_data.get('odbiur_podmiot')
     tryb = chat_data.get('tryb_odbioru')
-    prefix_lokalu = chat_data.get('biezacy_lokal_w_szeregu')
+    
+    prefix_lokalu = chat_data.get('biezacy_lokal_w_szeregu') # Np. "70/1"
+    
+    opis_do_nazwy_pliku = usterka_opis_raw.strip()
+    
+    target_folder_name = ""
     
     if prefix_lokalu:
         target_folder_name = prefix_lokalu.replace('/', '.')
         opis_do_arkusza = f"{prefix_lokalu} - {usterka_opis_raw} (zdjęcie)"
     else:
-        await update.message.reply_text("❌ BŁĄD: Nie wybrano lokalu.", reply_markup=get_inline_keyboard(usterka_id=None, context=context))
+        await update.message.reply_text(
+            "❌ BŁĄD: Nie wybrano lokalu dla zdjęcia.\n\n"
+            "Proszę, <b>wybierz lokal z przycisków poniżej</b> i wyślij zdjęcie ponownie.",
+            reply_markup=get_inline_keyboard(usterka_id=None, context=context),
+            parse_mode='HTML'
+        )
         return
 
-    await update.message.reply_text(f"Wysyłam zdjęcie do folderu: <b>{target_folder_name}</b>...", parse_mode='HTML')
+    await update.message.reply_text(f"Otrzymano zdjęcie dla usterki: '{opis_do_nazwy_pliku}'.\n"
+                                    f"Wysyłam do folderu: <b>{target_folder_name}</b>...",
+                                    reply_markup=get_inline_keyboard(usterka_id=None, context=context),
+                                    parse_mode='HTML')
 
     try:
         photo_file = await update.message.photo[-1].get_file()
@@ -597,209 +731,258 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await photo_file.download_to_memory(file_bytes_io)
         
         success, message, file_id = upload_photo_to_drive(
-            file_bytes_io, target_folder_name, usterka_opis_raw.strip(), podmiot, tryb_odbioru=tryb
+            file_bytes_io, 
+            target_folder_name,
+            opis_do_nazwy_pliku,
+            podmiot, 
+            tryb_odbioru=tryb
         )
         
         if success:
             usterka_id = str(uuid.uuid4())
-            nowy_wpis = {'id': usterka_id, 'typ': 'zdjecie', 'opis': opis_do_arkusza, 'file_id': file_id}
+            nowy_wpis = {
+                'id': usterka_id,
+                'typ': 'zdjecie',
+                'opis': opis_do_arkusza, 
+                'file_id': file_id
+            }
             chat_data['odbiur_wpisy'].append(nowy_wpis)
             
-            await update.message.reply_text(
-                f"✅ Zdjęcie zapisane. ➕ Usterka dodana.\n(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
-                reply_markup=get_inline_keyboard(usterka_id=usterka_id, context=context),
-                parse_mode='HTML'
-            )
+            await update.message.reply_text(f"✅ Zdjęcie zapisane na Drive jako: <b>{message}</b>\n"
+                                            f"➕ Usterka dodana do listy: <b>{opis_do_arkusza}</b>\n"
+                                            f"(Łącznie: {len(chat_data['odbiur_wpisy'])}).",
+                                            reply_markup=get_inline_keyboard(usterka_id=usterka_id, context=context),
+                                            parse_mode='HTML')
         else:
-            await update.message.reply_text(f"❌ Błąd Google Drive: {message}")
+            await update.message.reply_text(f"❌ Błąd Google Drive: {message}",
+                                            reply_markup=get_inline_keyboard(usterka_id=None, context=context))
             
     except Exception as e:
-        logger.error(f"Błąd zdjęcia: {e}")
-        await update.message.reply_text(f"❌ Wystąpił błąd: {e}")
+        logger.error(f"Błąd podczas przetwarzania zdjęcia: {e}")
+        await update.message.reply_text(f"❌ Wystąpił błąd przy pobieraniu zdjęcia: {e}",
+                                        reply_markup=get_inline_keyboard(usterka_id=None, context=context))
 
 
 # --- 7c. HANDLER: Obsługa przycisków Inline ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Obsługuje naciśnięcia przycisków inline."""
     query = update.callback_query
-    await query.answer()
+    await query.answer() 
     
     chat_data = context.chat_data
     data = query.data
 
+    # --- Logika dla 'start_menu' (przycisk "Anuluj") ---
     if data == 'start_menu':
         if chat_data.get('odbiur_aktywny'):
             await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
             return
         
-        mode = chat_data.get('app_mode', 'add')
         chat_data.clear()
-        chat_data['app_mode'] = mode
         try:
-            await query.edit_message_text("Anulowano.", reply_markup=None)
-        except: pass
-        await query.message.reply_text("Menu Główne:", reply_markup=get_main_menu_keyboard(mode))
+            await query.edit_message_text("Anulowano wybór.", reply_markup=None)
+        except Exception:
+            pass
+        await query.message.reply_text("Gotowy na nowy odbiór.", reply_markup=START_KEYBOARD)
         return
 
-    # --- Wybór Szeregu (Wspólne dla obu trybów, ale inna reakcja) ---
+    # --- Logika dla 'szereg_' ---
     elif data.startswith('szereg_'):
+        if chat_data.get('odbiur_aktywny'):
+            await query.answer("Odbiór jest aktywny. Zakończ go.", show_alert=True)
+            return
+        
         szereg_name = data.split('_', 1)[1]
         chat_data['wybrany_szereg'] = szereg_name
         
-        # !!! SPRAWDZAMY TRYB !!!
-        if chat_data.get('app_mode') == 'archive':
-            # ARCHIWUM: Pomijamy firmę, ładujemy lokale
-            chat_data['lista_lokali_szeregu'] = DANE_SZEREGOW[szereg_name].get("lokale", [])
-            
+        chat_data['state'] = 'AWAITING_FIRMA_SZEREG'
+        await query.edit_message_text(
+            f"Wybrano: <b>CAŁY {szereg_name}</b>\n\n"
+            f"Proszę, <b>podaj teraz nazwę firmy</b> wykonawczej (możesz wpisać skrót, np. 'Pelc' lub 'Ivan'):",
+            parse_mode='HTML'
+        )
+        return
+    
+    # --- NOWA LOGIKA: Ustawianie aktywnego lokalu w trybie "Całe Szeregi" ---
+    elif data.startswith("setlokal_"):
+        if not chat_data.get('odbiur_aktywny'):
+            await query.message.reply_text("Sesja nieaktywna.", reply_markup=START_KEYBOARD)
+            return
+        
+        lokal_name = data.split('_', 1)[1]
+        chat_data['biezacy_lokal_w_szeregu'] = lokal_name
+        
+        await query.answer(f"OK! Następne usterki będą dla lokalu: {lokal_name}")
+        
+        try:
+            nowy_tekst = f"Aktywny lokal dla usterek: <b>{lokal_name}</b>\n(Ostatnia akcja: {datetime.now().strftime('%H:%M:%S')})"
             await query.edit_message_text(
-                f"📂 <b>ARCHIWUM: {szereg_name}</b>\n\n"
-                f"Kliknij w numer lokalu, aby zobaczyć historię usterek:",
+                nowy_tekst,
                 reply_markup=get_inline_keyboard(usterka_id=None, context=context),
                 parse_mode='HTML'
             )
-            return
-        else:
-            # DODAWANIE: Pytamy o firmę
-            if chat_data.get('odbiur_aktywny'):
-                await query.answer("Odbiór aktywny.", show_alert=True)
-                return
-
-            chat_data['state'] = 'AWAITING_FIRMA_SZEREG'
-            await query.edit_message_text(
-                f"Wybrano: <b>CAŁY {szereg_name}</b>\n"
-                f"Podaj nazwę firmy:",
-                parse_mode='HTML'
-            )
-            return
+        except Exception as e:
+             logger.warning(f"Nie można edytować wiadomości po setlokal: {e}")
+             await query.message.reply_text(f"Aktywny lokal dla usterek zmieniony na: <b>{lokal_name}</b>", 
+                                            parse_mode='HTML',
+                                            reply_markup=get_inline_keyboard(usterka_id=None, context=context))
+        return
     
-    # --- Wybór Lokalu (Wspólne dla obu trybów) ---
-    elif data.startswith("setlokal_"):
-        lokal_name = data.split('_', 1)[1]
-        
-        # !!! TRYB ARCHIWUM !!!
-        if chat_data.get('app_mode') == 'archive':
-            await query.answer(f"Pobieram dane dla {lokal_name}...")
-            # Pobieramy dane
-            raport = pobierz_usterki_z_archiwum(lokal_name)
-            # Wysyłamy jako nową wiadomość, aby nie psuć menu nawigacji
-            await query.message.reply_text(raport, parse_mode='HTML', disable_web_page_preview=False)
-            return
-        
-        # !!! TRYB DODAWANIA !!!
-        else:
-            if not chat_data.get('odbiur_aktywny'):
-                 await query.message.reply_text("Sesja nieaktywna.", reply_markup=get_main_menu_keyboard('add'))
-                 return
-            
-            chat_data['biezacy_lokal_w_szeregu'] = lokal_name
-            await query.answer(f"Lokal: {lokal_name}")
-            try:
-                nowy_tekst = f"Aktywny lokal: <b>{lokal_name}</b>\n(Wybrano: {datetime.now().strftime('%H:%M:%S')})"
-                await query.edit_message_text(
-                    nowy_tekst,
-                    reply_markup=get_inline_keyboard(usterka_id=None, context=context),
-                    parse_mode='HTML'
-                )
-            except Exception: pass
-            return
-    
-    # --- Obsługa przycisków funkcyjnych (Tylko tryb ADD) ---
+    # --- Logika dla 'cofnij' z ID ---
     elif data.startswith('cofnij_'):
-        id_to_delete = data.split('_', 1)[1]
-        wpisy_lista = chat_data.get('odbiur_wpisy', [])
-        wpis_to_delete = next((w for w in wpisy_lista if w.get('id') == id_to_delete), None)
+        logger.info("Otrzymano callback 'cofnij' z ID")
+        if not chat_data.get('odbiur_aktywny'):
+            await query.message.reply_text("Sesja już się zakończyła.", reply_markup=START_KEYBOARD)
+            return
 
-        if wpis_to_delete:
+        try:
+            id_to_delete = data.split('_', 1)[1]
+        except Exception as e:
+            logger.error(f"Nie można sparsować ID z callback: {data} - {e}")
+            await query.answer("Błąd: Nieprawidłowy format ID.", show_alert=True)
+            return
+
+        wpisy_lista = chat_data.get('odbiur_wpisy', [])
+        wpis_to_delete = None
+        
+        for wpis in wpisy_lista:
+            if wpis.get('id') == id_to_delete:
+                wpis_to_delete = wpis
+                break
+
+        if not wpis_to_delete:
+            logger.warning(f"Próbowano usunąć usterkę {id_to_delete}, ale już nie istnieje.")
+            await query.answer("Ta usterka została już usunięta.", show_alert=True)
+            try:
+                await query.edit_message_text(f"--- TA USTERKA ZOSTAŁA JUŻ USUNIĘTA ---", reply_markup=None)
+            except Exception:
+                pass
+            return
+
+        try:
+            opis_usunietego = wpis_to_delete.get('opis', 'NIEZNANY WPIS')
             wpisy_lista.remove(wpis_to_delete)
             chat_data['odbiur_wpisy'] = wpisy_lista
-            delete_info = f"↩️ Usunięto: <b>{wpis_to_delete.get('opis')}</b>"
             
-            if wpis_to_delete.get('typ') == 'zdjecie' and wpis_to_delete.get('file_id'):
-                ok, err = delete_file_from_drive(wpis_to_delete['file_id'])
-                delete_info += " (Drive OK)" if ok else f" (Drive Error: {err})"
-            
-            try: await query.edit_message_text(f"--- USUNIĘTO ---", reply_markup=None)
-            except: pass
-            
-            await query.message.reply_text(
-                f"{delete_info}\n(Pozostało: {len(wpisy_lista)})",
-                reply_markup=get_inline_keyboard(usterka_id=None, context=context),
-                parse_mode='HTML'
-            )
-        else:
-            await query.answer("Już usunięto.", show_alert=True)
+            delete_feedback = f"↩️ Usunięto: <b>{opis_usunietego}</b>"
 
-    elif data == 'koniec_odbioru':
-        identyfikator = chat_data.get('odbiur_identyfikator', '')
-        podmiot = chat_data.get('odbiur_podmiot')
-        wpisy = chat_data.get('odbiur_wpisy', [])
-        msg_time = datetime.now()
+            if wpis_to_delete.get('typ') == 'zdjecie':
+                file_id_to_delete = wpis_to_delete.get('file_id')
+                if file_id_to_delete:
+                    delete_success, delete_error = delete_file_from_drive(file_id_to_delete)
+                    if delete_success:
+                        delete_feedback += "\n(Pomyślnie usunięto z Google Drive)."
+                    else:
+                        delete_feedback += f"\n(BŁĄD usuwania z Drive: {delete_error})."
+            
+            try:
+                await query.edit_message_text(f"--- USUNIĘTO: <b>{opis_usunietego}</b> ---", reply_markup=None, parse_mode='HTML')
+            except Exception:
+                pass
+
+            await query.message.reply_text(f"{delete_feedback}\n(Pozostało: {len(wpisy_lista)}).", 
+                                           reply_markup=get_inline_keyboard(usterka_id=None, context=context),
+                                           parse_mode='HTML')
         
-        if not wpisy:
-            await query.message.reply_text("Zakończono bez usterek.", reply_markup=get_main_menu_keyboard('add'))
+        except Exception as e:
+            logger.error(f"Błąd podczas usuwania wpisu: {e}")
+            await query.answer(f"Błąd: {e}", show_alert=True)
+
+    # --- Logika dla 'koniec_odbioru' ---
+    elif data == 'koniec_odbioru':
+        logger.info("Otrzymano callback 'koniec_odbioru'")
+        if not chat_data.get('odbiur_aktywny'):
+            await query.message.reply_text("Żaden odbiór nie jest aktywny.", reply_markup=START_KEYBOARD)
+            return
+        
+        identyfikator_odbioru = chat_data.get('odbiur_identyfikator', 'Brak ID Odbioru')
+        podmiot = chat_data.get('odbiur_podmiot')
+        wpisy_lista = chat_data.get('odbiur_wpisy', [])
+        message_time = datetime.now() 
+        
+        if not wpisy_lista:
+            await query.message.reply_text(f"Zakończono odbiór dla {identyfikator_odbioru}. Nie dodano żadnych usterek.",
+                                           reply_markup=START_KEYBOARD)
         else:
-            licznik = 0
-            for wpis in wpisy:
-                opis = wpis.get('opis', '')
-                lokal = identyfikator
-                usterka = opis
-                if ' - ' in opis:
-                    parts = opis.split(' - ', 1)
-                    if len(parts) == 2: lokal, usterka = parts[0], parts[1]
+            logger.info(f"Zapisywanie {len(wpisy_lista)} usterek dla {identyfikator_odbioru}...")
+            licznik_zapisanych = 0
+            
+            for wpis in wpisy_lista:
+                opis_caly = wpis.get('opis', 'BŁĄD WPISU')
+                
+                lokal_dla_wpisu = identyfikator_odbioru
+                usterka_dla_wpisu = opis_caly
+
+                if ' - ' in opis_caly:
+                    parts = opis_caly.split(' - ', 1)
+                    if len(parts) == 2:
+                        lokal_dla_wpisu = parts[0]
+                        usterka_dla_wpisu = parts[1]
                 
                 dane_json = {
-                    "numer_lokalu_budynku": lokal,
-                    "rodzaj_usterki": usterka,
+                    "numer_lokalu_budynku": lokal_dla_wpisu,
+                    "rodzaj_usterki": usterka_dla_wpisu,
                     "podmiot_odpowiedzialny": podmiot,
                     "link_do_zdjecia": ""
                 }
-                if wpis.get('file_id'):
-                    dane_json['link_do_zdjecia'] = f"https://drive.google.com/file/d/{wpis['file_id']}/view"
+                file_id_ze_zdjecia = wpis.get('file_id')
+                if file_id_ze_zdjecia:
+                    link_zdjecia = f"https://drive.google.com/file/d/{file_id_ze_zdjecia}/view"
+                    dane_json['link_do_zdjecia'] = link_zdjecia
                 
-                if zapisz_w_arkuszu(dane_json, msg_time):
-                    licznik += 1
+                if zapisz_w_arkuszu(dane_json, message_time):
+                    licznik_zapisanych += 1
             
-            await query.message.reply_text(
-                f"✅ Zakończono. Zapisano {licznik}/{len(wpisy)} usterek dla {identyfikator}.",
-                reply_markup=get_main_menu_keyboard('add')
-            )
+            await query.message.reply_text(f"✅ Zakończono odbiór.\nZapisano {licznik_zapisanych} z {len(wpisy_lista)} usterek dla {identyfikator_odbioru}.",
+                                           reply_markup=START_KEYBOARD)
         
         chat_data.clear()
-        # Przywracamy tryb add
-        chat_data['app_mode'] = 'add'
-        try: await query.edit_message_reply_markup(reply_markup=None)
-        except: pass
-
+        
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.warning(f"Nie można edytować starej wiadomości: {e}")
+            
+    # --- Logika dla pustego przycisku (np. separator) ---
     elif data == "noop":
-        await query.answer()
+        await query.answer() 
         return
 
 
 # --- 8. Uruchomienie Bota ---
 def main():
-    logger.info("Uruchamianie bota...")
+    """Główna funkcja uruchamiająca bota dla hostingu."""
+    
+    logger.info("Uruchamianie bota w trybie WEBHOOK...")
     
     PORT = int(os.environ.get('PORT', 8443))
-    domain = os.environ.get('RAILWAY_PUBLIC_DOMAIN') or os.environ.get('WEBHOOK_URL')
+    domain = os.environ.get('RAILWAY_PUBLIC_DOMAIN')
     
+    if domain:
+        WEBHOOK_URL = f"https://{domain}"
+        logger.info(f"Wykryto domenę Railway: {WEBHOOK_URL}")
+    else:
+        WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
+        if not WEBHOOK_URL:
+            logger.critical("BŁĄD: Nie znaleziono zmiennej RAILWAY_PUBLIC_DOMAIN ani WEBHOOK_URL!")
+            exit()
+
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start_command))
+
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(handle_callback_query))
 
-    if domain:
-        WEBHOOK_URL = f"https://{domain}"
-        logger.info(f"Webhook: {WEBHOOK_URL}")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
-        )
-    else:
-        logger.warning("Brak domeny Webhook, uruchamianie w trybie Polling (lokalnie).")
-        application.run_polling()
+    logger.info(f"Ustawianie webhooka na: {WEBHOOK_URL}")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_TOKEN}"
+    )
+    logger.info(f"Bot nasłuchuje na porcie {PORT}")
 
 if __name__ == '__main__':
     main()
