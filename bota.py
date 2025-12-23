@@ -59,7 +59,8 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "Complex Bruk Mateusz Oleksak",
     "Usługi Budowlane Michał Piskorz",
     "PRIMA TYNK Janusz Pelc",
-    "Dachy płaskie hydroizolacje Grzegorz Madej"
+    "Dachy płaskie hydroizolacje Grzegorz Madej",
+    "QCZYSTOSCI"
 ]
 
 # --- 3c. Dane do Przycisków ---
@@ -986,3 +987,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
