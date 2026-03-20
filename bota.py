@@ -60,7 +60,8 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "Usługi Budowlane Michał Piskorz",
     "PRIMA TYNK Janusz Pelc",
     "Dachy płaskie hydroizolacje Grzegorz Madej",
-    "QCZYSTOSCI"
+    "QCZYSTOSCI",
+    "Przecieki"
 ]
 
 # --- 3c. Dane do Przycisków ---
