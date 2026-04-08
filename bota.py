@@ -61,7 +61,8 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "PRIMA TYNK Janusz Pelc",
     "Dachy płaskie hydroizolacje Grzegorz Madej",
     "QCZYSTOSCI",
-    "Przecieki"
+    "Przecieki",
+    "DOMOTECH Roman Vorona" 
 ]
 
 # --- 3c. Dane do Przycisków ---
