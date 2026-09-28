@@ -62,6 +62,7 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "Dachy płaskie hydroizolacje Grzegorz Madej",
     "QCZYSTOSCI",
     "Przecieki",
+    "Spękania na wylewkach",
     "DOMOTECH Roman Vorona" 
 ]
 
