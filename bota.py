@@ -63,6 +63,7 @@ LISTA_FIRM_WYKONAWCZYCH = [
     "QCZYSTOSCI",
     "Przecieki",
     "Spękania na wylewkach",
+    "Kamerowanie",
     "DOMOTECH Roman Vorona" 
 ]
 
